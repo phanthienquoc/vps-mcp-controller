@@ -30,4 +30,5 @@ export async function executeOperation(op:Operation):Promise<string>{
   await run("/usr/local/bin/k3s",["kubectl","rollout","restart","deployment/"+op.deployment,"-n",op.namespace],30000);
   return run("/usr/local/bin/k3s",["kubectl","rollout","status","deployment/"+op.deployment,"-n",op.namespace,"--timeout=120s"],130000);
  }
+  throw new Error("Unsupported operation");
 }
