@@ -45,9 +45,6 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/vps_deploy ~/.ssh/known_hosts
           ssh-keygen -y -f ~/.ssh/vps_deploy >/dev/null
-          {
-            echo "SSH_OPTS=-i ~/.ssh/vps_deploy -p ${{ vars.VPS_SSH_PORT || '22' }} -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts"
-          } >> "$GITHUB_ENV"
 
       - name: Fetch exact revision and deploy
         env:
