@@ -12,7 +12,8 @@
   "scripts": {
     "build": "npm run build -w @vps-mcp/contracts && npm run build -w @vps-mcp/root-agent && npm run build -w @vps-mcp/gateway",
     "typecheck": "npm run build -w @vps-mcp/contracts && npm run typecheck -w @vps-mcp/root-agent && npm run typecheck -w @vps-mcp/gateway",
-    "check": "npm run typecheck"
+    "check": "npm run typecheck",
+    "test": "npm run build && node --test tests/*.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.0.0",
