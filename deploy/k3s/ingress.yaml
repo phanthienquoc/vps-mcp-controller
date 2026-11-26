@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vps-mcp-gateway
+  namespace: ops-prod
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [mcp.mrcute.space]
+      secretName: mcp-mrcute-space-tls
+  rules:
+    - host: mcp.mrcute.space
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: vps-mcp-gateway
+                port:
+                  number: 80

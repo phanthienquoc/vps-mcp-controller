@@ -1,0 +1,30 @@
+[Unit]
+Description=VPS MCP Root Execution Agent
+After=network.target containerd.service k3s.service
+Wants=containerd.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0007
+Environment=ROOT_AGENT_SOCKET=/run/vps-mcp/root-agent.sock
+Environment=ROOT_AGENT_GID=34001
+WorkingDirectory=/opt/vps-mcp-controller
+ExecStartPre=/usr/bin/install -d -o root -g 34001 -m 0750 /run/vps-mcp
+ExecStart=/usr/bin/node /opt/vps-mcp-controller/apps/root-agent/dist/index.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/run/vps-mcp
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
