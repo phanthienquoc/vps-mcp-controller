@@ -25,7 +25,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: gateway
-          image: ghcr.io/phanthienquoc/vps-mcp-controller:latest
+          image: ghcr.io/phanthienquoc/vps-mcp-controller:REPLACE_WITH_VERIFIED_SHA_TAG
           imagePullPolicy: Always
           ports:
             - name: http
