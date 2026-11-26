@@ -1,0 +1,37 @@
+version: 1
+mode: autonomous
+default: deny
+audit:
+  stdout_json: true
+  redact_secrets: true
+  require_request_id: true
+limits:
+  request_body_bytes: 16384
+  command_timeout_ms: 120000
+  output_bytes: 100000
+  journal_lines_max: 300
+permissions:
+  host:
+    read: [status]
+  systemd:
+    inspect: [k3s, containerd, docker, ssh, cron, vps-root-agent]
+    restart: [cron, vps-root-agent]
+  containerd:
+    inspect: true
+  kubernetes:
+    inspect_all_namespaces: true
+    restart_deployments:
+      namespaces: [ops-prod, tce-prod]
+      excluded_namespaces: [stock-prod, media-prod, kube-system, default]
+    delete_resources: false
+    delete_namespaces: false
+    apply_arbitrary_manifest: false
+  filesystem:
+    arbitrary_write: false
+    destructive_operations: false
+  network:
+    firewall_mutation: false
+  databases:
+    destructive_sql: false
+  credentials:
+    rotate_or_revoke_admin_access: false

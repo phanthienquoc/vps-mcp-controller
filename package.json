@@ -1,0 +1,22 @@
+{
+  "name": "vps-mcp-controller",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=26 <27"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @vps-mcp/contracts && npm run build -w @vps-mcp/root-agent && npm run build -w @vps-mcp/gateway",
+    "typecheck": "npm run build -w @vps-mcp/contracts && npm run typecheck -w @vps-mcp/root-agent && npm run typecheck -w @vps-mcp/gateway",
+    "check": "npm run typecheck",
+    "test": "npm run build && node --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "typescript": "^6.0.0"
+  }
+}

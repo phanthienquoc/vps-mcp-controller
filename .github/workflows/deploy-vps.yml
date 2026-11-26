@@ -1,0 +1,79 @@
+name: Deploy VPS MCP Controller
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: deploy-tce-k3s-01
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment: tce-k3s-01
+    steps:
+      - name: Checkout selected master revision
+        uses: actions/checkout@v4
+
+      - name: Build and publish immutable gateway image
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          docker buildx build \
+            --platform linux/amd64 \
+            --file apps/mcp-gateway/Dockerfile \
+            --tag ghcr.io/phanthienquoc/vps-mcp-controller:${GITHUB_SHA} \
+            --push .
+
+      - name: Configure strict SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/vps_deploy
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/vps_deploy ~/.ssh/known_hosts
+          ssh-keygen -y -f ~/.ssh/vps_deploy >/dev/null
+
+      - name: Fetch exact revision and deploy
+        env:
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_USER: ${{ vars.VPS_USER }}
+          VPS_SSH_PORT: ${{ vars.VPS_SSH_PORT || '22' }}
+          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST"
+          test -n "$VPS_USER"
+          test -n "$GHCR_READ_TOKEN"
+
+          SSH=(ssh -i ~/.ssh/vps_deploy -p "$VPS_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts)
+
+          "${SSH[@]}" "$VPS_USER@$VPS_HOST" \
+            "git -C /opt/vps-mcp-controller fetch --depth=1 origin master && git -C /opt/vps-mcp-controller checkout --detach '$GITHUB_SHA'"
+
+          printf '%s' "$GHCR_READ_TOKEN" | "${SSH[@]}" "$VPS_USER@$VPS_HOST" \
+            "sudo -n /usr/local/sbin/vps-mcp-deploy '$GITHUB_SHA'"
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          {
+            echo "### VPS MCP deployment succeeded"
+            echo "- Host: tce-k3s-01"
+            echo "- Revision: ${GITHUB_SHA}"
+            echo "- Image: ghcr.io/phanthienquoc/vps-mcp-controller:${GITHUB_SHA}"
+          } >> "$GITHUB_STEP_SUMMARY"
