@@ -14,6 +14,7 @@ WORKDIR /app
 COPY package.json ./
 COPY packages/contracts/package.json packages/contracts/package.json
 COPY apps/mcp-gateway/package.json apps/mcp-gateway/package.json
+COPY apps/root-agent/package.json apps/root-agent/package.json
 RUN npm install --omit=dev --no-audit --no-fund
 COPY --from=build /app/packages/contracts/dist packages/contracts/dist
 COPY --from=build /app/apps/mcp-gateway/dist apps/mcp-gateway/dist

@@ -25,7 +25,7 @@ const handler=createMcpHandler(()=>{
  server.registerTool("service_logs",{description:"Read recent journal entries from an allowlisted systemd unit.",inputSchema:z.object({unit:z.enum(["k3s","containerd","docker","ssh","cron","vps-root-agent"]),lines:z.number().int().min(1).max(300).default(100)})},async({unit,lines})=>{
   const r=await callRootAgent({action:"systemd.journal",unit,lines});return{content:[{type:"text",text:r.output??"No output"}]};
  });
- server.registerTool("restart_service",{description:"Restart only services in the root-agent restart allowlist: cron and vps-root-agent.",inputSchema:z.object({unit:z.enum(["cron","vps-root-agent"])})},async({unit})=>{
+ server.registerTool("restart_service",{description:"Restart cron only. Restarting the Root Agent from inside its own request would interrupt the response and is intentionally disabled.",inputSchema:z.object({unit:z.enum(["cron"])})},async({unit})=>{
   const r=await callRootAgent({action:"systemd.restart",unit});return{content:[{type:"text",text:r.output??"No output"}]};
  });
  server.registerTool("containerd_status",{description:"Inspect containerd service state; read-only.",inputSchema:z.object({})},async()=>{
