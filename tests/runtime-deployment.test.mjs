@@ -84,3 +84,98 @@ test("production gateway manifest does not mount a static bearer token", async (
   const manifest = await read("../deploy/k3s/deployment.yaml");
   assert.doesNotMatch(manifest, /MCP_BEARER_TOKEN|mcp-bearer-token|vps-mcp-secrets/);
 });
+
+
+
+
+test("read-only preflight validates the target node and parses OAuth key names", async () => {
+  const preflight = await read("../scripts/preflight-vps.sh");
+  assert.match(preflight, /get node tce-k3s-01/);
+  assert.match(preflight, /Expected node tce-k3s-01 is Ready/);
+  assert.match(preflight, /Required local-path StorageClass is missing/);
+  const oauthLine = preflight.split("\n").find((line) => line.includes("OAUTH_KEYS="));
+  assert.ok(oauthLine, "OAuth Secret key extraction must be present");
+  const newlineEscape = oauthLine.match(/%s(\\+)n/);
+  assert.equal(newlineEscape?.[1].length, 1, "Go template must emit real newline-delimited keys");
+  assert.match(preflight, /Root Agent service is not active/);
+  assert.match(preflight, /vps-mcp-preflight/);
+  assert.match(preflight, /Root Agent socket must be root:34001 mode 0660/);
+});
+
+test("deployment verifies the intended Ready node before any Kubernetes apply", async () => {
+  const deploy = await read("../scripts/deploy-vps.sh");
+  const manifest = await read("../deploy/k3s/deployment.yaml");
+  const nodeGuard = deploy.indexOf('get node tce-k3s-01');
+  const firstApply = deploy.indexOf('"$' + '{KUBECTL[@]}" apply -f "$MANIFEST_DIR/namespace.yaml"');
+  assert.ok(nodeGuard > 0, "target node readiness guard must exist");
+  assert.ok(firstApply > nodeGuard, "target node guard must precede all Kubernetes mutations");
+  assert.match(manifest, /nodeSelector:\s+kubernetes\.io\/hostname:\s*tce-k3s-01/);
+  assert.match(deploy, /Root Agent socket must be root-owned, group GID 34001 and mode 0660/);
+});
+
+test("deploy workflow requires OAuth approval, port 22, non-root SSH and pinned host keys", async () => {
+  const workflow = await read("../.github/workflows/deploy-vps.yml");
+  assert.match(workflow, /environment: tce-k3s-01/);
+  assert.match(workflow, /MCP_OAUTH_PRODUCTION_READY/);
+  assert.match(workflow, /test "\$VPS_SSH_PORT" = "22"/);
+  assert.match(workflow, /test "\$VPS_USER" != "root"/);
+  assert.match(workflow, /StrictHostKeyChecking=yes/);
+  assert.match(workflow, /ssh-keygen -F "\$VPS_HOST"/);
+  assert.match(workflow, /sudo -n \/usr\/local\/sbin\/vps-mcp-preflight/);
+  assert.match(workflow, /sudo -n \/usr\/local\/sbin\/vps-mcp-deploy/);
+  assert.match(workflow, /Run read-only VPS preflight before publishing/);
+  assert.match(workflow, /printf '%s' "\$GHCR_READ_TOKEN" \|/);
+});
+
+test("deploy-entrypoint installer rejects root SSH users and installs only narrow sudo commands", async () => {
+  const installer = await read("../scripts/install-deploy-entrypoint.sh");
+  assert.match(installer, /DEPLOY_USER.*== "root"/);
+  assert.match(installer, /install -o root -g root -m 0750 "\$PREFLIGHT_SOURCE" \/usr\/local\/sbin\/vps-mcp-preflight/);
+  assert.match(installer, /NOPASSWD: \/usr\/local\/sbin\/vps-mcp-deploy, \/usr\/local\/sbin\/vps-mcp-preflight/);
+});
+
+test("production docs describe the explicit OAuth approval and immutable deployment gates", async () => {
+  const deployment = await read("../docs/DEPLOYMENT.md");
+  const security = await read("../docs/SECURITY.md");
+  const readme = await read("../README.md");
+  assert.match(deployment, /MCP_OAUTH_PRODUCTION_READY=true/);
+  assert.match(deployment, /StrictHostKeyChecking/);
+  assert.match(security, /immutable 40-character/);
+  assert.match(readme, /self-hosted OAuth 2.1 Authorization Code \+ PKCE/);
+});
+
+
+test("root deploy completes all read-only prerequisite checks before namespace or PVC mutation", async () => {
+  const deploy = await read("../scripts/deploy-vps.sh");
+  const secretCheck = deploy.indexOf('get secret "$OAUTH_SECRET"');
+  const storageCheck = deploy.indexOf('get storageclass local-path');
+  const issuerCheck = deploy.indexOf('if [[ "$ISSUER_READY" != "True" ]]');
+  const namespaceApply = deploy.indexOf('"$' + '{KUBECTL[@]}" apply -f "$MANIFEST_DIR/namespace.yaml"');
+  const pvcApply = deploy.indexOf('apply -f "$MANIFEST_DIR/oauth-pvc.yaml"');
+  assert.ok(secretCheck > 0 && storageCheck > 0 && issuerCheck > 0);
+  assert.ok(namespaceApply > secretCheck && namespaceApply > storageCheck && namespaceApply > issuerCheck);
+  assert.ok(pvcApply > namespaceApply);
+});
+
+test("deploy workflow runs read-only preflight before image publication", async () => {
+  const workflow = await read("../.github/workflows/deploy-vps.yml");
+  const gate = workflow.indexOf("Validate immutable source and deployment gates");
+  const preflight = workflow.indexOf("Run read-only VPS preflight before publishing");
+  const build = workflow.indexOf("Build and publish immutable multi-architecture gateway image");
+  assert.ok(gate > 0 && preflight > gate && build > preflight);
+});
+
+
+test("privileged installers and root deploy entrypoint reject SSH-user writes to trusted inputs", async () => {
+  const rootInstaller = await read("../scripts/install-root-agent.sh");
+  const deployInstaller = await read("../scripts/install-deploy-entrypoint.sh");
+  const deploy = await read("../scripts/deploy-vps.sh");
+  assert.ok(rootInstaller.includes("for trusted_path in /opt"));
+  assert.ok(rootInstaller.includes("Existing vps-mcp group must use GID 34001"));
+  assert.ok(rootInstaller.includes('sudo -u "$SUDO_USER" test -w "$trusted_path"'));
+  assert.ok(deployInstaller.includes('for trusted_path in "/opt"'));
+  assert.ok(deployInstaller.includes('"$REPO_DIR/.git"'));
+  assert.ok(deploy.includes("Root deploy entrypoint must be a root-owned"));
+  assert.ok(deploy.includes("for trusted_path in /opt"));
+  assert.ok(deploy.includes('"$REPO_DIR/.git"'));
+});
