@@ -15,6 +15,7 @@ const AUTHORIZATION_TTL = 10 * 60;
 const SESSION_TTL = 8 * 60 * 60;
 const REFRESH_TTL = 30 * 24 * 60 * 60;
 const SCOPE = "mcp:tools";
+const SESSION_COOKIE = "__Host-mcp_session";
 
 mkdirSync(dirname(DB_PATH), { recursive: true, mode: 0o700 });
 const db = new DatabaseSync(DB_PATH);
@@ -134,7 +135,38 @@ const publicJwk = await exportJWK(createPublicKey(signingKeyPem.replace(/\\n/g, 
 publicJwk.use = "sig";
 publicJwk.alg = "RS256";
 publicJwk.kid = process.env.MCP_OAUTH_SIGNING_KID ?? "mcp-key-1";
-const jwks = { keys: [publicJwk] };
+
+function loadPreviousPublicKeys(): JWK[] {
+  const raw = process.env.MCP_OAUTH_PREVIOUS_PUBLIC_KEYS;
+  if (!raw) return [];
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { throw new Error("MCP_OAUTH_PREVIOUS_PUBLIC_KEYS must be a JSON array of public RSA JWKs"); }
+  if (!Array.isArray(parsed) || parsed.length > 5) {
+    throw new Error("MCP_OAUTH_PREVIOUS_PUBLIC_KEYS must be an array containing at most five public RSA JWKs");
+  }
+  const seen = new Set<string>([String(publicJwk.kid)]);
+  return parsed.map((value, index) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`Previous OAuth JWK at index ${index} is invalid`);
+    }
+    const key = value as Record<string, unknown>;
+    const forbidden = ["d", "p", "q", "dp", "dq", "qi", "oth"];
+    if (forbidden.some((name) => name in key)
+        || key.kty !== "RSA" || key.use !== "sig" || key.alg !== "RS256"
+        || typeof key.kid !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(key.kid)
+        || typeof key.n !== "string" || typeof key.e !== "string"
+        || !/^[A-Za-z0-9_-]+$/.test(key.n) || !/^[A-Za-z0-9_-]+$/.test(key.e)
+        || Buffer.from(key.n, "base64url").length < 256
+        || Buffer.from(key.e, "base64url").toString("hex") !== "010001") {
+      throw new Error(`Previous OAuth JWK at index ${index} must be a public RSA-2048+ RS256 signing key`);
+    }
+    if (seen.has(key.kid)) throw new Error(`Duplicate OAuth signing key id: ${key.kid}`);
+    seen.add(key.kid);
+    return { kty: "RSA", use: "sig", alg: "RS256", kid: key.kid, n: key.n, e: key.e } as JWK;
+  });
+}
+
+const jwks = { keys: [publicJwk, ...loadPreviousPublicKeys()] };
 
 function htmlEscape(value: string): string {
   return value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -174,7 +206,7 @@ function requestParams(req: Request): URLSearchParams {
 }
 function sessionUser(req: Request): string | null {
   const cookie = req.header("cookie") ?? "";
-  const raw = cookie.split(";").map((x) => x.trim()).find((x) => x.startsWith("mcp_session="))?.slice(12);
+  const raw = cookie.split(";").map((x) => x.trim()).find((x) => x.startsWith(`${SESSION_COOKIE}=`))?.slice(SESSION_COOKIE.length + 1);
   if (!raw) return null;
   const row = db.prepare("SELECT user_id,expires_at FROM sessions WHERE token_hash=?").get(hash(decodeURIComponent(raw))) as
     { user_id: string; expires_at: number } | undefined;
@@ -349,7 +381,7 @@ export async function createLocalOAuthRouter() {
     const session = randomToken();
     db.prepare("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)")
       .run(hash(session), user.id, Math.floor(Date.now() / 1000) + SESSION_TTL);
-    res.setHeader("Set-Cookie", `mcp_session=${encodeURIComponent(session)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL}`);
+    res.setHeader("Set-Cookie", `${SESSION_COOKIE}=${encodeURIComponent(session)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL}`);
     res.redirect(303, `/oauth/authorize?${consumed.toString()}`);
   });
 
@@ -445,9 +477,9 @@ export async function createLocalOAuthRouter() {
   router.post("/oauth/logout", (req, res) => {
     if (!isSameOriginFormPost(req)) return sendError(res, 403, "access_denied", "Cross-origin form submission rejected");
     const cookie = req.header("cookie") ?? "";
-    const raw = cookie.split(";").map((x) => x.trim()).find((x) => x.startsWith("mcp_session="))?.slice(12);
+    const raw = cookie.split(";").map((x) => x.trim()).find((x) => x.startsWith(`${SESSION_COOKIE}=`))?.slice(SESSION_COOKIE.length + 1);
     if (raw) db.prepare("DELETE FROM sessions WHERE token_hash=?").run(hash(decodeURIComponent(raw)));
-    res.setHeader("Set-Cookie", "mcp_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0");
+    res.setHeader("Set-Cookie", `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`);
     res.status(204).end();
   });
 
