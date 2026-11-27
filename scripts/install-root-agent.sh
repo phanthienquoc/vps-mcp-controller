@@ -13,6 +13,10 @@ if [[ "$ROOT_DIR" != "$INSTALL_DIR" || ! -d "$INSTALL_DIR/.git" ]]; then
   echo "Use the trusted Git checkout at $INSTALL_DIR" >&2
   exit 1
 fi
+if [[ "$(stat -c '%U:%G' /opt)" != "root:root" ]] || find /opt -maxdepth 0 -perm /022 -print -quit | grep -q .; then
+  echo "/opt must be root-owned and not group/world-writable" >&2
+  exit 1
+fi
 if [[ "$(stat -c '%U:%G' "$INSTALL_DIR")" != "root:root" ]]; then
   echo "Repository checkout must be owned by root:root" >&2
   exit 1
