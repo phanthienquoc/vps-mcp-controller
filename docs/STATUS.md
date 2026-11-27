@@ -13,17 +13,19 @@ Updated: 2026-11-27
 - [x] CI and GHCR image-publish workflow.
 - [x] Contract tests for namespace mutation boundary, systemd restart scope and bounded journal output.
 - [x] Read-only VPS preflight.
-- [x] Root-owned deployment checkout and installer ownership/write-access guards (hardening PR branch).
-- [x] Root deploy entrypoint verifies immutable commit SHA reachability from origin/master and applies only manifests archived from that verified commit (hardening PR branch).
-- [x] GHCR imagePullSecret creation uses a mode-0600 temporary Docker config; token is streamed on stdin and is not passed in process arguments (hardening PR branch).
-- [x] CI contract assertions cover trusted checkout, immutable SHA and secret handling (hardening PR branch).
+- [x] Root-owned deployment checkout and installer ownership/write-access guards.
+- [x] Root deploy entrypoint verifies immutable commit SHA reachability from origin/master and applies only manifests archived from that verified commit.
+- [x] GHCR imagePullSecret creation uses a mode-0600 temporary Docker config; token is streamed on stdin and is not passed in process arguments.
+- [x] Gateway image publication targets linux/amd64 and linux/arm64.
+- [x] Host Root Agent uses a checksum-verified Node 26 runtime isolated under the trusted checkout; no system-wide Node/npm is required.
+- [x] Preflight treats the expected unauthenticated GHCR HTTP 401 challenge as registry reachability.
 
 ## Hardening review and production gates
 
-- [ ] Required CI checks pass and hardening PR is squash-merged.
-- [ ] User runs the read-only VPS preflight after merge and reviews all output.
+- [ ] Required CI checks pass and implementation PR is squash-merged.
+- [ ] User runs the updated read-only VPS preflight after merge and reviews all output.
 - [ ] Test Root Agent in an isolated Linux VM.
-- [ ] Verify Node.js 26, DNS, IngressClass, TLS secret, GHCR permissions and available disk on the actual VPS.
+- [ ] Verify DNS, IngressClass, TLS secret, GHCR permissions and available disk on the actual VPS.
 - [ ] Install host Root Agent only after preflight review and explicit authorization.
 - [ ] Deploy gateway only after separate explicit authorization and verify all tools.
 - [ ] Prove recovery/rollback behavior.
@@ -38,6 +40,6 @@ Updated: 2026-11-27
 - Root Agent is a host UID 0 service with typed operations; no model-supplied arbitrary shell text.
 - Autonomous service restart is limited to cron.
 - Autonomous rollout restart is limited to ops-prod and tce-prod.
-- stock-prod and media-prod are read-only for this controller until separate review.
+- stock-prod and media-prod are read-only for this controller until separate policy review.
 
-No VPS command has been executed and no Kubernetes manifest has been applied by repository setup or this hardening change. Production completion must not be claimed until the gates above have evidence.
+No VPS command has been executed and no Kubernetes manifest has been applied by this implementation change. Production completion must not be claimed until the gates above have evidence.
