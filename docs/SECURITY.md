@@ -15,6 +15,17 @@
 - Bootstrap account is created once from runtime Secret values. This initial version has no user management, password reset/change UI or MFA; keep access restricted to one administrator until those controls exist.
 - Never commit credentials, password hashes, signing keys or token material. Do not expose secrets in logs.
 
+## Production workflow gates
+
+- The only production workflow is manual dispatch on `master` in the `tce-k3s-01` GitHub Environment.
+- Require `MCP_OAUTH_PRODUCTION_READY=true` only after OAuth protocol/security review and ChatGPT MCP authorization end-to-end verification.
+- Require SSH port 22, a non-root deploy account, a pinned `known_hosts` entry, `StrictHostKeyChecking=yes`, and an immutable 40-character `GITHUB_SHA`.
+- Validate all required Environment variables and secrets before building/publishing; do not print or pass secrets in process arguments.
+- Run the read-only preflight before image publication. The workflow logs only its PASS/WARN/FAIL summary, not host inventory.
+- GHCR read credentials travel over SSH stdin. The host creates the pull secret from a mode-0600 temporary Docker config and removes the temporary file.
+- The root-owned entrypoint fetches `origin/master`, verifies the requested commit is an ancestor, and applies only the Kubernetes manifests archived from that trusted checkout.
+- Verify Kubernetes node `tce-k3s-01` is Ready and pin the Gateway Pod to it so the hostPath Root Agent socket cannot resolve on another node.
+
 ## Deployment trust
 
 - Gateway runs as UID 10001, with read-only root filesystem, no added capabilities and no service-account token.
