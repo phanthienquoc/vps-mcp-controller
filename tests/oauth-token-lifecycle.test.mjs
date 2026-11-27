@@ -61,6 +61,7 @@ async function registerClient(redirectUri = "https://client.example/callback") {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
+      client_name: "ChatGPT VPS Connector",
       redirect_uris: [redirectUri],
       grant_types: ["authorization_code", "refresh_token"],
       token_endpoint_auth_method: "none"
@@ -101,6 +102,7 @@ async function authorizeAndGetCode(clientId, redirectUri = "https://client.examp
   const consentPage = await fetch(new URL(login.headers.get("location"), baseUrl), { headers: { cookie } });
   assert.equal(consentPage.status, 200);
   const consentHtml = await consentPage.text();
+  assert.match(consentHtml, /Application: <strong>ChatGPT VPS Connector<\/strong>/);
   const consentTransaction = consentHtml.match(/name="transaction" value="([A-Za-z0-9_-]{43})"/)?.[1];
   assert.ok(consentTransaction, "consent form must contain an opaque transaction handle");
 
@@ -388,6 +390,18 @@ test("concurrent refresh-token reuse revokes the token family", async () => {
   assert.equal(familyRevoked.status, 400);
 });
 
+
+test("DCR rejects empty or oversized client display names", async () => {
+  for (const client_name of ["", "x".repeat(101)]) {
+    const response = await fetch(baseUrl + "/oauth/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ client_name, redirect_uris: ["https://client.example/callback"] })
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error, "invalid_client_metadata");
+  }
+});
 
 test("DCR follows RFC 7591 default grant and enforces registered grant types", async () => {
   const registration = await fetch(baseUrl + "/oauth/register", {
