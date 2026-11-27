@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { Operation } from "@vps-mcp/contracts";
-import { inspectableUnits, managedNamespaces, restartableUnits } from "@vps-mcp/contracts";
+import { inspectableUnits, managedDeployments, restartableUnits } from "@vps-mcp/contracts";
 const execFileAsync = promisify(execFile);
 const env = { ...process.env, PATH:"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", KUBECONFIG:"/etc/rancher/k3s/k3s.yaml" };
 async function run(file:string,args:string[],timeout=12000):Promise<string>{
@@ -10,6 +10,10 @@ async function run(file:string,args:string[],timeout=12000):Promise<string>{
 }
 function assertUnit(unit:string):void{
  if(!(inspectableUnits as readonly string[]).includes(unit)) throw new Error("Unit is not in inspection allowlist");
+}
+function assertDeployment(namespace:string,deployment:string):void{
+ const allowed = managedDeployments[namespace as keyof typeof managedDeployments] as readonly string[] | undefined;
+ if(!allowed?.includes(deployment)) throw new Error("Deployment is not in the namespace allowlist");
 }
 export async function executeOperation(op:Operation):Promise<string>{
  switch(op.action){
@@ -26,9 +30,9 @@ export async function executeOperation(op:Operation):Promise<string>{
  case "containerd.status": return run("/usr/bin/systemctl",["show","containerd","--no-pager","--property=Id,ActiveState,SubState"]);
  case "k3s.pods": return run("/usr/local/bin/k3s",["kubectl","get","pods","--all-namespaces","-o","wide"],20000);
  case "k3s.rolloutRestart":
-  if(!(managedNamespaces as readonly string[]).includes(op.namespace)) throw new Error("Namespace is not enabled for autonomous mutation");
+  assertDeployment(op.namespace,op.deployment);
   await run("/usr/local/bin/k3s",["kubectl","rollout","restart","deployment/"+op.deployment,"-n",op.namespace],30000);
   return run("/usr/local/bin/k3s",["kubectl","rollout","status","deployment/"+op.deployment,"-n",op.namespace,"--timeout=120s"],130000);
  }
-  throw new Error("Unsupported operation");
+ throw new Error("Unsupported operation");
 }

@@ -4,8 +4,8 @@
 
 - Read host status, journal entries and pod inventory.
 - Inspect allowlisted systemd units.
-- Restart cron or vps-root-agent.
-- Restart a deployment only in ops-prod or tce-prod and verify rollout status.
+- Restart cron only; restarting the Root Agent from its own request is disabled.
+- Restart only `vps-mcp-gateway` in `ops-prod` or `tce-frontend` / `tce-service` in `tce-prod`, then verify rollout status.
 
 ## Not enabled
 
