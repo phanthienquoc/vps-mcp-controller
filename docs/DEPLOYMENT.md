@@ -1,69 +1,54 @@
 # Production deployment runbook
 
-This repository is **production-only**. There is no staging namespace, static bearer-token setup, or staging deployment path.
+Production-only. No Keycloak, no external identity provider and no static bearer-token mode.
 
-## Selected self-hosted authorization server: existing Keycloak
+## Self-hosted OAuth 2.1
 
-Reuse the existing Keycloak installation on `tce-k3s-01`; do not introduce another identity product or another database. Keycloak already provides OpenID Connect authorization-code flow, discovery metadata, JWKS and PKCE S256 support. Official docs: https://www.keycloak.org/securing-apps/oidc-layers and https://www.keycloak.org/docs/latest/server_admin/.
+The MCP Gateway hosts both the protected resource and a minimal authorization server at \`https://mcp.mrcute.space\`.
 
-**Important existing blocker:** previous cluster diagnostics showed Keycloak database connection-pool checkout timeouts. Recover the existing Keycloak/Postgres connectivity before creating the MCP realm/client. Do not deploy a second Keycloak or switch its database as part of this change.
+- OAuth authorization server metadata: \`/.well-known/oauth-authorization-server\`
+- Protected resource metadata: \`/.well-known/oauth-protected-resource\`
+- Authorization endpoint: \`/oauth/authorize\`
+- Token endpoint: \`/oauth/token\`
+- DCR endpoint: \`/oauth/register\`
+- JWKS endpoint: \`/oauth/jwks.json\`
+- Revocation endpoint: \`/oauth/revoke\`
 
-## Keycloak configuration
+Authorization Code + PKCE S256 is required. ChatGPT's DCR flow is supported; CIMD is deliberately not advertised in this first version. Public clients use token endpoint auth method \`none\`. The resource parameter must equal \`https://mcp.mrcute.space/mcp\` and is copied into JWT audience.
 
-Create a dedicated realm, for example `mcp`, and a dedicated public OIDC client for ChatGPT MCP access:
+## Required Kubernetes Secret
 
-- Realm issuer: `https://<KEYCLOAK_HOST>/realms/mcp`.
-- Discovery URL: `https://<KEYCLOAK_HOST>/realms/mcp/.well-known/openid-configuration`.
-- Client authentication: **Off** (public client).
-- Standard flow: **On**.
-- Direct access grants: **Off**.
-- PKCE Code Challenge Method: **S256 required**.
-- Valid redirect URIs: add only the exact callback URI supplied by ChatGPT during MCP connection setup; do not use wildcard redirects.
-- Web origins: keep narrowly scoped; do not use `*`.
-- Access token lifespan: **5 minutes**.
-- Create a dedicated client scope/role named `mcp:tools` and assign it only to the intended user/client.
-- Add an Audience mapper so the access token contains `aud: https://mcp.mrcute.space/mcp` exactly. Do not rely on the default `account` audience.
-- Ensure the access token contains the `mcp:tools` scope claim. Keep unrelated realm/client roles out of this client.
+Create the Secret \`mcp-oauth-secrets\` in namespace \`ops-prod\` through the approved secret-provisioning path (never commit it):
 
-Use Keycloak's public OIDC discovery document as the gateway metadata URL. The gateway verifies exact issuer, HTTPS authorization/token/JWKS endpoints, code flow, PKCE S256 and signed JWT claims.
+- \`MCP_BOOTSTRAP_EMAIL\`: initial admin login email.
+- \`MCP_BOOTSTRAP_PASSWORD\`: strong initial password, at least 14 characters.
+- \`MCP_OAUTH_SIGNING_PRIVATE_KEY\`: PEM-encoded RSA private key (PKCS#8, RSA 2048-bit minimum; 3072-bit recommended).
+- \`MCP_OAUTH_SIGNING_KID\`: stable key identifier, e.g. \`mcp-rsa-2026-01\`.
 
-## Gateway runtime values
+The app hashes the bootstrap password with scrypt and stores the account in SQLite on persistent storage. The bootstrap user is created only if the email does not already exist; changing the environment password does not overwrite an existing account. Signing key rotation must retain the previous public key during the maximum token lifetime and is a separate reviewed operation.
 
-- `MCP_OAUTH_ISSUER=https://<KEYCLOAK_HOST>/realms/mcp`
-- `MCP_OAUTH_METADATA_URL=https://<KEYCLOAK_HOST>/realms/mcp/.well-known/openid-configuration`
-- `MCP_RESOURCE_URL=https://mcp.mrcute.space/mcp`
-- `MCP_OAUTH_REQUIRED_SCOPES=mcp:tools`
+## Persistent data
 
-Replace `<KEYCLOAK_HOST>` with the real public HTTPS Keycloak hostname already configured in the cluster. Do not guess it. No Keycloak admin password, client secret or signing key belongs in Git, Kubernetes manifests or ChatGPT. The MCP client is public; the gateway validates access tokens using the realm's public JWKS.
+The deployment mounts a persistent volume claim \`mcp-auth-data\` at \`/var/lib/vps-mcp-auth\`. SQLite stores users, registered OAuth clients, sessions, authorization codes and refresh-token families. Do not run more than one gateway replica against this SQLite database. The deployment strategy is Recreate.
 
-## Revocation and session handling
+## Important implementation limitations / security gates
 
-Gateway JWT verification is stateless. Disabling a Keycloak user/session or revoking a refresh token does not invalidate an already-issued access JWT immediately; it remains usable until expiry. Keep access tokens at five minutes. For urgent revocation, also rotate the realm signing key or add an online token introspection check in a separately reviewed change. Do not claim immediate revocation from logout alone.
+- Login uses a single bootstrap administrator account. User creation, password reset/change UI, multi-user administration and MFA are not implemented.
+- Login attempts are throttled by IP/email in SQLite. Place the service behind the existing trusted HTTPS ingress and preserve a trustworthy client IP policy; do not blindly trust user-supplied forwarded headers.
+- DCR accepts HTTPS redirect URIs only and stores exact URI matches. The initial ChatGPT integration must be verified against the actual callback URI.
+- CIMD and \`private_key_jwt\` are not advertised or supported; the authorization server advertises DCR and public-client \`none\`.
+- Access JWTs last five minutes. Revoking refresh tokens does not immediately invalidate already-issued access tokens; they expire within five minutes.
+- Refresh tokens rotate on every use; reuse of a consumed token revokes its family.
+- Signing private key and bootstrap password are runtime secrets only; never put them in Git, ConfigMaps, command history or chat.
 
-## Current release gate
+## Before deployment
 
-Do not install the Root Agent or deploy the Gateway yet. First recover Keycloak's existing database connectivity, configure the dedicated realm/client, and verify discovery metadata and a real test token's issuer, audience, scope, signature and five-minute expiry. Automated provider-backed tests, independent security review and ChatGPT MCP interoperability checks remain mandatory.
+The PR must pass Node 26 typecheck/build/tests, an OAuth protocol/security review and an end-to-end ChatGPT MCP authorization test. Confirm persistent volume availability and provision the Kubernetes Secret out of band. Do not install the Root Agent or deploy until separately authorized.
 
-Do not recreate `vps-mcp-secrets`, do not generate static bearer tokens, and do not dispatch the deploy workflow.
+## Existing VPS preflight
 
-## VPS read-only preflight
-
-After the repository change is merged, run only:
-
-~~~bash
+\`\`\`bash
 sudo bash /opt/vps-mcp-controller/scripts/preflight-vps.sh
-~~~
+\`\`\`
 
-## Remaining production prerequisites
-
-- Trusted root-owned checkout at `/opt/vps-mcp-controller`; deploy SSH user cannot write it.
-- Dedicated non-root SSH deploy account; GitHub Actions is the only deployment path.
-- Node.js 26 runtime isolated under the trusted checkout.
-- k3s reachable, at least 2 GiB free, DNS `mcp.mrcute.space` correct, cert-manager issuer Ready and ingress TCP 80/443 reachable.
-- GitHub Environment `tce-k3s-01` with `VPS_HOST`, `VPS_USER`, `VPS_SSH_PORT=22`; secrets `VPS_SSH_PRIVATE_KEY`, `VPS_KNOWN_HOSTS`, and read-only `GHCR_READ_TOKEN`.
-
-Never send private keys, passwords, admin credentials or tokens through ChatGPT.
-
-## Authorization gate
-
-Only after Keycloak recovery, provider-backed tests, security review and ChatGPT MCP interoperability checks may the user authorize Root Agent installation and, separately, production deployment. A merged PR or successful CI is not deployment authorization.
+This command is read-only. No production workload changes are authorized by merging this PR.
