@@ -17,7 +17,7 @@ const SCOPE = "mcp:tools";
 
 mkdirSync(dirname(DB_PATH), { recursive: true, mode: 0o700 });
 const db = new DatabaseSync(DB_PATH);
-db.exec(\`
+db.exec(`
   PRAGMA journal_mode = WAL;
   PRAGMA foreign_keys = ON;
   CREATE TABLE IF NOT EXISTS users (
@@ -46,7 +46,7 @@ db.exec(\`
     user_id TEXT NOT NULL, resource TEXT NOT NULL, scope TEXT NOT NULL,
     expires_at INTEGER NOT NULL, used_at INTEGER
   );
-\`);
+`);
 
 function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -92,7 +92,7 @@ function htmlEscape(value: string): string {
   return value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 function page(title: string, body: string): string {
-  return \`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>\${htmlEscape(title)}</title><style>body{font:16px system-ui;background:#f4f5f7;margin:0;display:grid;min-height:100vh;place-items:center}.card{background:white;padding:28px;border-radius:14px;width:min(390px,calc(100% - 56px));box-shadow:0 8px 32px #0001}input,button{box-sizing:border-box;width:100%;padding:12px;margin:8px 0;border:1px solid #ccd0d5;border-radius:8px;font:inherit}button{background:#111827;color:white;border:0;cursor:pointer}small{color:#666}</style><main class="card"><h2>\${htmlEscape(title)}</h2>\${body}</main></html>\`;
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${htmlEscape(title)}</title><style>body{font:16px system-ui;background:#f4f5f7;margin:0;display:grid;min-height:100vh;place-items:center}.card{background:white;padding:28px;border-radius:14px;width:min(390px,calc(100% - 56px));box-shadow:0 8px 32px #0001}input,button{box-sizing:border-box;width:100%;padding:12px;margin:8px 0;border:1px solid #ccd0d5;border-radius:8px;font:inherit}button{background:#111827;color:white;border:0;cursor:pointer}small{color:#666}</style><main class="card"><h2>${htmlEscape(title)}</h2>${body}</main></html>`;
 }
 function sendError(res: Response, status: number, error: string, description?: string): void {
   res.status(status).json({ error, ...(description ? { error_description: description } : {}) });
@@ -140,11 +140,11 @@ export async function createLocalOAuthRouter() {
   const router = Router();
   const authMetadata = {
     issuer: ISSUER,
-    authorization_endpoint: \`\${ISSUER}/oauth/authorize\`,
-    token_endpoint: \`\${ISSUER}/oauth/token\`,
-    registration_endpoint: \`\${ISSUER}/oauth/register\`,
-    revocation_endpoint: \`\${ISSUER}/oauth/revoke\`,
-    jwks_uri: \`\${ISSUER}/oauth/jwks.json\`,
+    authorization_endpoint: `${ISSUER}/oauth/authorize`,
+    token_endpoint: `${ISSUER}/oauth/token`,
+    registration_endpoint: `${ISSUER}/oauth/register`,
+    revocation_endpoint: `${ISSUER}/oauth/revoke`,
+    jwks_uri: `${ISSUER}/oauth/jwks.json`,
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],
@@ -197,10 +197,10 @@ export async function createLocalOAuthRouter() {
     const serialized = Buffer.from(p.toString()).toString("base64url");
     const userId = sessionUser(req);
     if (!userId) {
-      res.type("html").send(page("Sign in", \`<form method="post" action="/oauth/login"><input type="hidden" name="request" value="\${serialized}"><label>Email</label><input name="email" type="email" autocomplete="username" required><label>Password</label><input name="password" type="password" autocomplete="current-password" required><button>Sign in</button><small>Authorized access to the VPS MCP service</small></form>\`));
+      res.type("html").send(page("Sign in", `<form method="post" action="/oauth/login"><input type="hidden" name="request" value="${serialized}"><label>Email</label><input name="email" type="email" autocomplete="username" required><label>Password</label><input name="password" type="password" autocomplete="current-password" required><button>Sign in</button><small>Authorized access to the VPS MCP service</small></form>`));
       return;
     }
-    res.type("html").send(page("Authorize access", \`<p>Allow this client to access VPS monitoring and approved operations?</p><p><small>Permission: \${SCOPE}</small></p><form method="post" action="/oauth/consent"><input type="hidden" name="request" value="\${serialized}"><button>Allow access</button></form>\`));
+    res.type("html").send(page("Authorize access", `<p>Allow this client to access VPS monitoring and approved operations?</p><p><small>Permission: ${SCOPE}</small></p><form method="post" action="/oauth/consent"><input type="hidden" name="request" value="${serialized}"><button>Allow access</button></form>`));
   });
 
   router.post("/oauth/login", async (req, res) => {
@@ -233,8 +233,8 @@ export async function createLocalOAuthRouter() {
     const session = randomToken();
     db.prepare("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)")
       .run(hash(session), user.id, Math.floor(Date.now() / 1000) + SESSION_TTL);
-    res.setHeader("Set-Cookie", \`mcp_session=\${encodeURIComponent(session)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=\${SESSION_TTL}\`);
-    res.redirect(303, \`/oauth/authorize?\${p.toString()}\`);
+    res.setHeader("Set-Cookie", `mcp_session=${encodeURIComponent(session)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL}`);
+    res.redirect(303, `/oauth/authorize?${p.toString()}`);
   });
 
   router.post("/oauth/consent", async (req, res) => {
