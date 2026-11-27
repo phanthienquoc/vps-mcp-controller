@@ -1,5 +1,9 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 
+export function parseOAuthScopes(value: string): string[] {
+  return value.trim().split(/\s+/).filter(Boolean);
+}
+
 export function pkceS256(verifier: string): string {
   return createHash("sha256").update(verifier).digest("base64url");
 }
