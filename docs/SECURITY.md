@@ -27,8 +27,9 @@
 
 - The only production workflow is manual dispatch on `master` in the `tce-k3s-01` GitHub Environment.
 - Require `MCP_OAUTH_PRODUCTION_READY=true` only after OAuth protocol/security review and ChatGPT MCP authorization end-to-end verification.
-- Require SSH port 22, a non-root deploy account, a pinned `known_hosts` entry, `StrictHostKeyChecking=yes`, and an immutable 40-character `GITHUB_SHA`.
-- Validate all required Environment variables and secrets before building/publishing; do not print or pass secrets in process arguments.
+- Require an immutable 40-character `GITHUB_SHA` from `master` and verify that the exact SHA has a completed successful `CI` push run before opening SSH or publishing an image. Use only `actions: read` for this CI evidence check.
+- Require `VPS_TARGET_ID=tce-k3s-01`, SSH port 22, a non-root deploy account, a pinned `known_hosts` entry and `StrictHostKeyChecking=yes`; the read-only remote preflight must confirm the same Kubernetes node is Ready.
+- Validate all required Environment variables and secrets before building/publishing; do not print secrets or pass them in process arguments.
 - Run the read-only preflight before image publication. The workflow logs only its PASS/WARN/FAIL summary, not host inventory.
 - GHCR read credentials travel over SSH stdin. The host creates the pull secret from a mode-0600 temporary Docker config and removes the temporary file.
 - The root-owned entrypoint fetches `origin/master`, verifies the requested commit is an ancestor, and applies only the Kubernetes manifests archived from that trusted checkout.
