@@ -13,18 +13,16 @@ type AuthorizationServerMetadata = {
 
 export type OAuthConfig = {
   issuer: string;
-  metadataUrl: string;
   resource: string;
   requiredScopes: string[];
-  metadata: AuthorizationServerMetadata;
   jwks: ReturnType<typeof createRemoteJWKSet>;
 };
 
 function requiredHttpsUrl(name: string, value: string | undefined): URL {
-  if (!value) throw new Error(`Missing required OAuth configuration: ${name}`);
+  if (!value) throw new Error(\`Missing required OAuth configuration: \${name}\`);
   const url = new URL(value);
   if (url.protocol !== "https:" || url.username || url.password || url.hash) {
-    throw new Error(`${name} must be an HTTPS URL without credentials or fragment`);
+    throw new Error(\`\${name} must be an HTTPS URL without credentials or fragment\`);
   }
   return url;
 }
@@ -35,7 +33,7 @@ function isStringArray(value: unknown): value is string[] {
 
 export function tokenHasScopes(payload: JWTPayload, requiredScopes: string[]): boolean {
   const scopeClaim = typeof payload.scope === "string"
-    ? payload.scope.split(/\\s+/).filter(Boolean)
+    ? payload.scope.split(/\s+/).filter(Boolean)
     : isStringArray(payload.scp) ? payload.scp : [];
   return requiredScopes.every((scope) => scopeClaim.includes(scope));
 }
@@ -47,16 +45,17 @@ export function readBearerToken(header: string | undefined): string | null {
 }
 
 export async function loadOAuthConfig(): Promise<OAuthConfig> {
-  const issuerUrl = requiredHttpsUrl("MCP_OAUTH_ISSUER", process.env.MCP_OAUTH_ISSUER);
+  const issuerValue = process.env.MCP_OAUTH_ISSUER;
+  const issuerUrl = requiredHttpsUrl("MCP_OAUTH_ISSUER", issuerValue);
   const metadataUrl = requiredHttpsUrl("MCP_OAUTH_METADATA_URL", process.env.MCP_OAUTH_METADATA_URL);
   const resourceUrl = requiredHttpsUrl(
     "MCP_RESOURCE_URL",
     process.env.MCP_RESOURCE_URL ?? "https://mcp.mrcute.space/mcp",
   );
-  const issuer = issuerUrl.toString().replace(/\\/$/, "");
+  const issuer = issuerValue!;
   const resource = resourceUrl.toString();
   const requiredScopes = (process.env.MCP_OAUTH_REQUIRED_SCOPES ?? "mcp:tools")
-    .split(/\\s+/).filter(Boolean);
+    .split(/\s+/).filter(Boolean);
   if (requiredScopes.length === 0 || requiredScopes.some((scope) => !/^[A-Za-z0-9:._-]{1,80}$/.test(scope))) {
     throw new Error("MCP_OAUTH_REQUIRED_SCOPES contains an invalid scope");
   }
@@ -65,7 +64,7 @@ export async function loadOAuthConfig(): Promise<OAuthConfig> {
     headers: { accept: "application/json" },
     signal: AbortSignal.timeout(8000),
   });
-  if (!response.ok) throw new Error(`OAuth metadata endpoint returned HTTP ${response.status}`);
+  if (!response.ok) throw new Error(\`OAuth metadata endpoint returned HTTP \${response.status}\`);
   const metadata = await response.json() as AuthorizationServerMetadata;
   if (metadata.issuer !== issuer) throw new Error("OAuth metadata issuer does not exactly match MCP_OAUTH_ISSUER");
   if (typeof metadata.authorization_endpoint !== "string" || typeof metadata.token_endpoint !== "string") {
@@ -90,34 +89,32 @@ export async function loadOAuthConfig(): Promise<OAuthConfig> {
 
   return {
     issuer,
-    metadataUrl: metadataUrl.toString(),
-    resource,
+    resource: resourceUrl.toString(),
     requiredScopes,
-    metadata,
     jwks: createRemoteJWKSet(jwksUrl, { timeoutDuration: 5000, cooldownDuration: 30000 }),
   };
 }
 
 export function createOAuthMiddleware(config: OAuthConfig): RequestHandler {
+  const metadataUri = \`\${config.resource.replace(/\/mcp$/, "")}/.well-known/oauth-protected-resource\`;
+  const challenge = \`Bearer resource_metadata="\${metadataUri}", scope="\${config.requiredScopes.join(" ")}"\`;
   return async (req, res, next) => {
     const token = readBearerToken(req.header("authorization"));
     if (!token) {
-      res.setHeader(
-        "WWW-Authenticate",
-        `Bearer resource_metadata="${config.resource.replace(/\\/mcp$/, "")}/.well-known/oauth-protected-resource", scope="${config.requiredScopes.join(" ")}"`,
-      );
+      res.setHeader("WWW-Authenticate", challenge);
       res.status(401).json({ error: "unauthorized" });
       return;
     }
     try {
-      const { payload, protectedHeader } = await jwtVerify(token, config.jwks, {
+      const { payload } = await jwtVerify(token, config.jwks, {
         issuer: config.issuer,
         audience: config.resource,
         algorithms: ["RS256", "PS256", "ES256", "EdDSA"],
         maxTokenAge: "15m",
         clockTolerance: 5,
       });
-      if (protectedHeader.alg === "none" || !payload.sub || !payload.iat || !payload.exp
+      if (typeof payload.sub !== "string" || !payload.sub
+          || typeof payload.iat !== "number" || typeof payload.exp !== "number"
           || payload.exp <= payload.iat || payload.exp - payload.iat > 900
           || !tokenHasScopes(payload, config.requiredScopes)) {
         throw new Error("Token claims rejected");
@@ -125,10 +122,7 @@ export function createOAuthMiddleware(config: OAuthConfig): RequestHandler {
       res.locals.oauth = { subject: payload.sub, scopes: config.requiredScopes };
       next();
     } catch {
-      res.setHeader(
-        "WWW-Authenticate",
-        `Bearer error="invalid_token", resource_metadata="${config.resource.replace(/\\/mcp$/, "")}/.well-known/oauth-protected-resource", scope="${config.requiredScopes.join(" ")}"`,
-      );
+      res.setHeader("WWW-Authenticate", \`Bearer error="invalid_token", \${challenge.slice(7)}\`);
       res.status(401).json({ error: "invalid_token" });
     }
   };
