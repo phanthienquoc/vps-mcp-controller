@@ -353,7 +353,7 @@ export async function createLocalOAuthRouter() {
       const access = await new SignJWT({ scope: row.scope })
         .setProtectedHeader({ alg: "RS256", kid: publicJwk.kid as string, typ: "at+jwt" })
         .setIssuer(ISSUER).setSubject(row.user_id).setAudience(row.resource)
-        .setIssuedAt().setExpirationTime(ACCESS_TTL).setJti(randomToken(16)).sign(signingKey);
+        .setIssuedAt().setExpirationTime(`${ACCESS_TTL}s`).setJti(randomToken(16)).sign(signingKey);
       const refresh = randomToken();
       db.prepare("INSERT INTO refresh_tokens(token_hash,family_id,client_id,user_id,resource,scope,expires_at) VALUES(?,?,?,?,?,?,?)")
         .run(hash(refresh), randomToken(16), clientId, row.user_id, row.resource, row.scope, Math.floor(Date.now() / 1000) + REFRESH_TTL);
@@ -376,7 +376,7 @@ export async function createLocalOAuthRouter() {
       const access = await new SignJWT({ scope: row.scope })
         .setProtectedHeader({ alg: "RS256", kid: publicJwk.kid as string, typ: "at+jwt" })
         .setIssuer(ISSUER).setSubject(row.user_id).setAudience(row.resource)
-        .setIssuedAt().setExpirationTime(ACCESS_TTL).setJti(randomToken(16)).sign(signingKey);
+        .setIssuedAt().setExpirationTime(`${ACCESS_TTL}s`).setJti(randomToken(16)).sign(signingKey);
       res.setHeader("Cache-Control", "no-store");
       res.json({ access_token: access, token_type: "Bearer", expires_in: ACCESS_TTL, refresh_token: next, scope: row.scope });
       return;
