@@ -1,14 +1,14 @@
 # Architecture
 
-ChatGPT connects to a non-root Node.js 26 MCP Gateway over HTTPS Streamable HTTP. The gateway runs in namespace ops-prod and calls a host Root Agent through a Unix-domain socket. The Root Agent runs as UID 0 under systemd on tce-k3s-01, validates the shared Zod operation contract, and invokes fixed executables with fixed or validated argument arrays.
+ChatGPT connects to a non-root Node.js 26 MCP Gateway over HTTPS Streamable HTTP. The Gateway runs in namespace ops-prod in a multi-architecture image. It calls a host Root Agent through a Unix-domain socket. The Root Agent runs as UID 0 under systemd on tce-k3s-01 using a checksum-verified, isolated Node.js 26 runtime stored under the trusted checkout; it does not require system-wide Node.js/npm. It validates the shared Zod operation contract and invokes fixed executables with fixed or validated argument arrays.
 
 ## Components
 
-- MCP Gateway: authentication, MCP tools, input validation and request audit.
-- Root Agent: host-level adapters for systemd, filesystem metrics, containerd and k3s.
+- MCP Gateway: authentication, MCP tools, input validation and request audit; Node.js is provided by its container image.
+- Root Agent: host-level adapters for systemd, filesystem metrics, containerd and k3s; Node.js runtime is isolated under /opt/vps-mcp-controller/runtime/node.
 - Contracts: one discriminated-union schema shared by gateway and root agent.
 - Policy: autonomous allowlists with default deny.
-- CI: typecheck, build and GHCR image publication.
+- CI: typecheck, build, tests and multi-architecture GHCR image publication.
 
 ## Trust boundaries
 
