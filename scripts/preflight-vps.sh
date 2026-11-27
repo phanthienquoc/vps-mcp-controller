@@ -4,13 +4,13 @@ set -uo pipefail
 PASS=0
 WARN=0
 FAIL=0
-ok(){ printf 'PASS  %s\\n' "$1"; PASS=$((PASS+1)); }
-warn(){ printf 'WARN  %s\\n' "$1"; WARN=$((WARN+1)); }
-fail(){ printf 'FAIL  %s\\n' "$1"; FAIL=$((FAIL+1)); }
+ok(){ printf 'PASS  %s\n' "$1"; PASS=$((PASS+1)); }
+warn(){ printf 'WARN  %s\n' "$1"; WARN=$((WARN+1)); }
+fail(){ printf 'FAIL  %s\n' "$1"; FAIL=$((FAIL+1)); }
 has(){ command -v "$1" >/dev/null 2>&1; }
 
-printf 'VPS MCP Controller production preflight (read-only)\\n'
-printf 'Host: %s | User: %s | Architecture: %s\\n\\n' "$(hostname)" "$(id -un)" "$(uname -m)"
+printf 'VPS MCP Controller production preflight (read-only)\n'
+printf 'Host: %s | User: %s | Architecture: %s\n\n' "$(hostname)" "$(id -un)" "$(uname -m)"
 
 REPO_DIR="/opt/vps-mcp-controller"
 CHECK_USER="${SUDO_USER:-$(id -un)}"
@@ -62,7 +62,7 @@ if has k3s; then
     ok "Production namespace ops-prod exists"
     if k3s kubectl -n ops-prod get secret mcp-mrcute-space-tls >/dev/null 2>&1; then ok "Production TLS secret exists"; else warn "Production TLS secret missing; deploy entrypoint provisions it"; fi
 
-    OAUTH_KEYS="$(k3s kubectl -n ops-prod get secret mcp-oauth-secrets -o go-template='{{range $k,$v := .data}}{{printf "%s\\n" $k}}{{end}}' 2>/dev/null || true)"
+    OAUTH_KEYS="$(k3s kubectl -n ops-prod get secret mcp-oauth-secrets -o go-template='{{range $k,$v := .data}}{{printf "%s\n" $k}}{{end}}' 2>/dev/null || true)"
     if [[ -n "$OAUTH_KEYS" ]]; then
       MISSING=()
       for key in MCP_BOOTSTRAP_EMAIL MCP_BOOTSTRAP_PASSWORD MCP_OAUTH_SIGNING_PRIVATE_KEY MCP_OAUTH_SIGNING_KID; do
