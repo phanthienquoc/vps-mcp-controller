@@ -12,10 +12,6 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
-# Fail closed: the gateway still uses a static bearer verifier and is not production ChatGPT OAuth.
-echo "Production deployment blocked: OAuth 2.1/PKCE and MCP authorization metadata are not implemented." >&2
-exit 78
-
 REPO_DIR="/opt/vps-mcp-controller"
 if [[ "$(stat -c '%U:%G' /opt)" != "root:root" ]] || find /opt -maxdepth 0 -perm /022 -print -quit | grep -q .; then
   echo "/opt must be root-owned and not group/world-writable" >&2
@@ -67,7 +63,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf -- "$TMP"' EXIT
 git -C "$REPO_DIR" archive --format=tar "$SHA" deploy/k3s | tar -xf - -C "$TMP"
 MANIFEST_DIR="$TMP/deploy/k3s"
-for manifest in namespace.yaml certificate.yaml deployment.yaml service.yaml ingress.yaml; do
+for manifest in namespace.yaml certificate.yaml deployment.yaml oauth-pvc.yaml service.yaml ingress.yaml; do
   if [[ ! -f "$MANIFEST_DIR/$manifest" || -L "$MANIFEST_DIR/$manifest" ]]; then
     echo "Trusted revision is missing a regular deploy/k3s/$manifest manifest" >&2
     exit 1
@@ -79,18 +75,50 @@ NAMESPACE="ops-prod"
 DEPLOYMENT="vps-mcp-gateway"
 IMAGE="ghcr.io/phanthienquoc/vps-mcp-controller:$SHA"
 
+if ! getent group vps-mcp >/dev/null; then
+  echo "Host group vps-mcp is missing; install it with GID 34001 before deployment" >&2
+  exit 1
+fi
+if [[ "$(getent group vps-mcp | cut -d: -f3)" != "34001" ]]; then
+  echo "Host group vps-mcp must use GID 34001" >&2
+  exit 1
+fi
 if ! systemctl is-active --quiet vps-root-agent; then
   echo "vps-root-agent is not active; refusing deployment" >&2
   exit 1
 fi
-if [[ ! -S /run/vps-mcp/root-agent.sock ]]; then
-  echo "Root Agent socket is missing" >&2
+SOCKET="/run/vps-mcp/root-agent.sock"
+if [[ ! -S "$SOCKET" ]]; then
+  echo "Root Agent socket is missing: $SOCKET" >&2
+  exit 1
+fi
+if [[ "$(stat -c '%g' "$SOCKET")" != "34001" ]]; then
+  echo "Root Agent socket must be owned by group GID 34001" >&2
   exit 1
 fi
 
 "${KUBECTL[@]}" get nodes >/dev/null
 "${KUBECTL[@]}" apply -f "$MANIFEST_DIR/namespace.yaml"
-"${KUBECTL[@]}" -n "$NAMESPACE" get secret vps-mcp-secrets >/dev/null
+
+OAUTH_SECRET="mcp-oauth-secrets"
+if ! "${KUBECTL[@]}" -n "$NAMESPACE" get secret "$OAUTH_SECRET" >/dev/null 2>&1; then
+  echo "Required OAuth Secret $OAUTH_SECRET is missing; provision it out of band" >&2
+  exit 1
+fi
+SECRET_KEYS="$("${KUBECTL[@]}" -n "$NAMESPACE" get secret "$OAUTH_SECRET" -o go-template='{{range $k,$v := .data}}{{printf "%s\\n" $k}}{{end}}')"
+for key in MCP_BOOTSTRAP_EMAIL MCP_BOOTSTRAP_PASSWORD MCP_OAUTH_SIGNING_PRIVATE_KEY MCP_OAUTH_SIGNING_KID; do
+  if ! grep -Fxq "$key" <<<"$SECRET_KEYS"; then
+    echo "Required key $key is missing from $OAUTH_SECRET" >&2
+    exit 1
+  fi
+done
+
+if ! "${KUBECTL[@]}" get storageclass local-path >/dev/null 2>&1; then
+  echo "Required StorageClass local-path is missing" >&2
+  exit 1
+fi
+"${KUBECTL[@]}" apply -f "$MANIFEST_DIR/oauth-pvc.yaml"
+
 ISSUER_READY="$("${KUBECTL[@]}" get clusterissuer letsencrypt-prod -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
 if [[ "$ISSUER_READY" != "True" ]]; then
   echo "cert-manager ClusterIssuer letsencrypt-prod is not Ready" >&2
@@ -119,7 +147,7 @@ auth = base64.b64encode(f"phanthienquoc:{token}".encode("utf-8")).decode("ascii"
 fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 with os.fdopen(fd, "w", encoding="utf-8") as handle:
     json.dump({"auths": {"ghcr.io": {"auth": auth}}}, handle)
-    handle.write("\n")
+    handle.write("\\n")
 PY
   unset GHCR_TOKEN
   if [[ "$(stat -c '%a' "$DOCKER_CONFIG_DIR/config.json")" != "600" ]]; then
