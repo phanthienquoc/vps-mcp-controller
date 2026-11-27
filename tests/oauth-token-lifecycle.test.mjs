@@ -144,7 +144,7 @@ test("publishes OAuth metadata and JWKS with the configured issuer and key id", 
   assert.equal(metadata.registration_endpoint, issuer + "/oauth/register");
   assert.equal(metadata.revocation_endpoint, issuer + "/oauth/revoke");
   assert.deepEqual(metadata.code_challenge_methods_supported, ["S256"]);
-  assert.deepEqual(metadata.token_endpoint_auth_methods_supported, ["none"]);
+  assert.deepEqual(metadata.token_endpoint_auth_methods_supported, ["none"]);\n  assert.equal(metadata.authorization_response_iss_parameter_supported, false);
 
   const jwks = await (await fetch(baseUrl + "/oauth/jwks.json")).json();
   assert.equal(jwks.keys.length, 1);
