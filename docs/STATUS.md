@@ -2,35 +2,28 @@
 
 Updated: 2026-11-27
 
-## Implemented
+## Implemented in branch
 
-- [x] Repository bootstrap and dedicated feature branch.
-- [x] Architecture, security, development, deployment and operations docs.
-- [x] Shared typed operation contract and MCP gateway/root-agent bootstrap.
-- [x] k3s deployment templates, CI, GHCR image workflow and immutable deploy entrypoint.
-- [x] Read-only VPS preflight and root-owned deployment checkout guards.
-- [x] Isolated checksum-verified Node.js 26 runtime for Root Agent.
-- [x] OAuth resource-server integration: protected-resource metadata, OIDC discovery validation, PKCE S256 capability gate, JWKS-backed JWT verification, exact issuer/audience/scope checks and 15-minute maximum token lifetime.
-- [x] Removed static bearer-token authentication from the gateway.
-- [x] Selected existing self-hosted Keycloak as authorization server; no new identity platform/database required.
+- [x] MCP gateway and Root Agent architecture, immutable deploy workflow and read-only VPS preflight.
+- [x] Self-hosted OAuth authorization server in the MCP Gateway; no Keycloak or external identity service.
+- [x] Authorization Code + PKCE S256, OAuth authorization-server metadata and protected-resource metadata.
+- [x] DCR for public clients with exact HTTPS redirect URI matching.
+- [x] Email/password bootstrap account with scrypt password hashing and login throttling.
+- [x] SQLite persistence for users, clients, sessions, one-time authorization codes and refresh-token families.
+- [x] RS256 JWT access tokens with resource audience, subject, scope, five-minute expiry and JWKS.
+- [x] Refresh-token rotation and family revocation on reuse; refresh-token revocation endpoint.
+- [x] Dedicated persistent volume and Kubernetes Secret references are being added.
 
-## Production gates
+## Not production-ready until verified
 
-- [ ] Recover existing Keycloak database connectivity; previous diagnostics showed connection-pool checkout timeouts.
-- [ ] Create dedicated `mcp` realm and public client; require Standard Flow and PKCE S256; disable Direct Access Grants.
-- [ ] Add exact MCP resource audience mapper and `mcp:tools` scope; verify actual JWT claims.
-- [ ] Set Keycloak access-token lifespan to five minutes.
-- [ ] Add automated Keycloak-backed tests and run CI/typecheck/build/security review.
-- [ ] Review short-lived JWT revocation behavior; logout alone does not immediately invalidate issued JWTs.
-- [ ] Verify ChatGPT MCP interoperability and exact redirect URI.
-- [ ] Only then authorize Root Agent installation and production deployment.
+- [ ] Node 26 CI: typecheck, build, unit tests and integration tests.
+- [ ] Add automated end-to-end PKCE/DCR/login/token/refresh/revocation tests.
+- [ ] Verify actual ChatGPT callback URI and DCR interoperability.
+- [ ] Add user password reset/change, multi-user administration and MFA before broader access.
+- [ ] Review CSRF, cookie, rate-limit, proxy/IP, SQLite backup/restore and key rotation behavior.
+- [ ] Verify persistent volume and secret provisioning on the target cluster.
+- [ ] Independent security review.
 
 ## Safety boundaries
 
-- Gateway runs non-root, without a Kubernetes service-account token or Docker socket.
-- Root Agent uses fixed typed operations; no model-supplied arbitrary shell text.
-- Autonomous service restart is limited to cron.
-- Autonomous rollout restart is limited to ops-prod and tce-prod.
-- stock-prod and media-prod remain read-only.
-
-No VPS command has been executed and no Kubernetes manifest has been applied. Production deployment remains blocked until all gates have evidence.
+No VPS command has been executed. No Kubernetes resource has been applied. No Root Agent or Gateway was installed. Merge is not deployment authorization.
