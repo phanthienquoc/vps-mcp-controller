@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
+import express from "express";
 import { createMcpExpressApp } from "@modelcontextprotocol/express";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import { callRootAgent } from "./root-client.js";
 import { createOAuthMiddleware, loadOAuthConfig, protectedResourceMetadata } from "./auth.js";
+import { createLocalOAuthRouter } from "./oauth-server.js";
 
 const port = Number(process.env.PORT ?? "3000");
 const publicHost = process.env.MCP_ALLOWED_HOST ?? "mcp.mrcute.space";
@@ -14,7 +16,7 @@ function audit(e: Record<string, unknown>): void {
   process.stdout.write(JSON.stringify({ ts: new Date().toISOString(), component: "mcp-gateway", ...e }) + "\n");
 }
 
-const oauth = await loadOAuthConfig();
+const oauth = loadOAuthConfig();
 const requireOAuth = createOAuthMiddleware(oauth);
 const handler = createMcpHandler(() => {
   const server = new McpServer({ name: "vps-mcp-controller", version: "0.1.0" });
@@ -58,6 +60,8 @@ const handler = createMcpHandler(() => {
 });
 
 const app = createMcpExpressApp({ host: "0.0.0.0", allowedHosts: [publicHost] });
+app.use(express.urlencoded({ extended: false, limit: "16kb" }));
+app.use(await createLocalOAuthRouter());
 app.get("/healthz", (_req, res) => res.status(200).json({ status: "ok", service: "vps-mcp-gateway" }));
 app.get(resourcePath, (_req, res) => res.status(200).json(protectedResourceMetadata(oauth)));
 const nodeHandler = toNodeHandler(handler);
@@ -68,7 +72,7 @@ app.listen(port, "0.0.0.0", () => audit({
   outcome: "listening",
   port,
   publicHost,
-  auth: "oauth2-pkce-jwt",
+  auth: "self-hosted-oauth2-pkce",
   issuer: oauth.issuer,
   resource: oauth.resource,
 }));
