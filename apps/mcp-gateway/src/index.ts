@@ -7,10 +7,24 @@ import * as z from "zod/v4";
 import { callRootAgent } from "./root-client.js";
 import { createOAuthMiddleware, loadOAuthConfig, protectedResourceMetadata } from "./auth.js";
 import { createLocalOAuthRouter } from "./oauth-server.js";
+import type { Operation } from "@vps-mcp/contracts";
 
 const port = Number(process.env.PORT ?? "3000");
 const publicHost = process.env.MCP_ALLOWED_HOST ?? "mcp.mrcute.space";
 const resourcePath = "/.well-known/oauth-protected-resource";
+
+function createRestartOperation(
+  namespace: "ops-prod" | "tce-prod",
+  deployment: "vps-mcp-gateway" | "tce-frontend" | "tce-service"
+): Operation {
+  if (namespace === "ops-prod" && deployment === "vps-mcp-gateway") {
+    return { action: "k3s.rolloutRestart", namespace, deployment };
+  }
+  if (namespace === "tce-prod" && (deployment === "tce-frontend" || deployment === "tce-service")) {
+    return { action: "k3s.rolloutRestart", namespace, deployment };
+  }
+  throw new Error("Deployment is not in the namespace allowlist");
+}
 
 function audit(e: Record<string, unknown>): void {
   process.stdout.write(JSON.stringify({ ts: new Date().toISOString(), component: "mcp-gateway", ...e }) + "\n");
@@ -57,7 +71,7 @@ const handler = createMcpHandler(() => {
     z.object({ namespace: z.literal("tce-prod"), deployment: z.enum(["tce-frontend", "tce-service"]) })
   ]);
   server.registerTool("k3s_restart_deployment", { description: "Restart only vps-mcp-gateway in ops-prod or tce-frontend/tce-service in tce-prod. Stock and media namespaces and all other deployments are denied.", inputSchema: restartInput }, async ({ namespace, deployment }) => {
-    const r = await callRootAgent({ action: "k3s.rolloutRestart", namespace, deployment });
+    const r = await callRootAgent(createRestartOperation(namespace, deployment));
     return { content: [{ type: "text", text: r.output ?? "No output" }] };
   });
   return server;
