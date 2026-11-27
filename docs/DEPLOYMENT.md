@@ -29,7 +29,7 @@ If the trusted checkout does not yet exist, stop and report that fact. Do not cl
 - cert-manager ClusterIssuer `letsencrypt-prod` Ready; ingress TCP 80/443 reachable.
 - GitHub Environment `tce-k3s-01` with `VPS_HOST`, a dedicated non-root `VPS_USER`, and `VPS_SSH_PORT=22`; secrets `VPS_SSH_PRIVATE_KEY`, `VPS_KNOWN_HOSTS`, and read-only `GHCR_READ_TOKEN`.
 - Environment variable `MCP_OAUTH_PRODUCTION_READY=true`, set only after OAuth 2.1/PKCE, authorization metadata, token lifecycle, and independent security review are complete.
-- Before publishing any image, the workflow verifies the pinned SSH host key, non-root remote UID, port 22, Kubernetes node `tce-k3s-01` Ready, root ownership and non-writable permissions for the trusted checkout/manifests/entrypoint, and a clean ownership/mode scan of the checkout.
+- Before publishing any image, the workflow verifies the pinned SSH host key, non-root remote UID, port 22, and a read-only `vps-mcp-deploy --preflight` check. That root-owned helper verifies the `tce-k3s-01` node, Root Agent/socket, isolated Node 26 runtime, root-owned non-writable checkout/manifests, ClusterIssuer, disk, and GHCR reachability.
 - OAuth issuer/client registration, persistent authorization-code/session storage, signing key rotation, JWKS, short-lived scoped audience-bound tokens and revocation, all provisioned through a reviewed secret-management process.
 
 Never send private keys, passwords, client secrets or tokens through ChatGPT.
