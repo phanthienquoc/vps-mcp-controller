@@ -142,6 +142,8 @@ test("deploy workflow gates the exact master CI commit and explicit tce-k3s-01 t
   assert.ok(workflow.includes('test "$VPS_TARGET_ID" = "tce-k3s-01"'));
   assert.ok(workflow.includes("Expected node ${VPS_TARGET_ID} is Ready"));
   assert.ok(workflow.includes("GH_TOKEN: ${{ github.token }}"));
+  assert.ok(workflow.includes('fail_gate "VPS_SSH_PRIVATE_KEY is not available in the tce-k3s-01 Environment"'));
+  assert.ok(workflow.includes('fail_gate "GHCR_READ_TOKEN is not available in the tce-k3s-01 Environment"'));
 });
 test("deploy-entrypoint installer rejects root SSH users and installs only narrow sudo commands", async () => {
   const installer = await read("../scripts/install-deploy-entrypoint.sh");
