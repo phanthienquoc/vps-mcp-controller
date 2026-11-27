@@ -10,7 +10,7 @@
 
 ## Trusted deployment source
 
-- /opt/vps-mcp-controller, .git, scripts and deployment manifests must be owned by root:root; regular files and directories must not be group/world-writable.
+- /opt and /opt/vps-mcp-controller, .git, scripts and deployment manifests must be owned by root:root; regular files and directories must not be group/world-writable.
 - The SSH deploy user must not be able to write the checkout, .git metadata, deploy scripts or manifests.
 - The root-owned deploy entrypoint fetches the fixed origin/master, verifies the requested full commit SHA exists and is an ancestor of refs/remotes/origin/master, and extracts only deploy/k3s from that commit.
 - Kubernetes applies use the extracted manifests from the verified commit, not the SSH user's working tree or a mutable branch checkout.
