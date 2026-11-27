@@ -40,9 +40,16 @@ if [[ -d "$REPO_DIR/.git" ]]; then
   check_trusted_path "$REPO_DIR/deploy/k3s"
   check_trusted_path "$REPO_DIR/deploy/k3s/deployment.yaml"
   check_trusted_path "$REPO_DIR/scripts/deploy-vps.sh"
+  check_trusted_path "$REPO_DIR/.git"
+  check_trusted_path "$REPO_DIR/scripts"
+  check_trusted_path "$REPO_DIR/scripts/preflight-vps.sh"
+  for manifest in namespace.yaml certificate.yaml deployment.yaml oauth-pvc.yaml service.yaml ingress.yaml; do
+    check_trusted_path "$REPO_DIR/deploy/k3s/$manifest"
+  done
 else fail "Trusted root-owned checkout missing at $REPO_DIR"; fi
 
-if [[ -x /usr/local/sbin/vps-mcp-deploy ]]; then check_trusted_path "/usr/local/sbin/vps-mcp-deploy"; else warn "Root deploy entrypoint is not installed yet (expected before deployment)"; fi
+if [[ -x /usr/local/sbin/vps-mcp-deploy ]]; then check_trusted_path "/usr/local/sbin/vps-mcp-deploy"; else fail "Root deploy entrypoint is not installed at /usr/local/sbin/vps-mcp-deploy"; fi
+if [[ -x /usr/local/sbin/vps-mcp-preflight ]]; then check_trusted_path "/usr/local/sbin/vps-mcp-preflight"; else fail "Read-only preflight wrapper is not installed at /usr/local/sbin/vps-mcp-preflight"; fi
 
 if [[ -x "$RUNTIME_NODE" && -x "$RUNTIME_NPM" ]]; then
   NODE_MAJOR="$("$RUNTIME_NODE" -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || echo 0)"
@@ -58,6 +65,10 @@ esac
 if has k3s; then
   ok "k3s binary found: $(command -v k3s)"
   if k3s kubectl get nodes -o wide >/dev/null 2>&1; then ok "k3s API reachable"; k3s kubectl get nodes -o wide; else fail "Cannot query k3s nodes; check sudo/kubeconfig"; fi
+  if k3s kubectl get node tce-k3s-01 >/dev/null 2>&1; then
+    NODE_READY="$(k3s kubectl get node tce-k3s-01 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+    if [[ "$NODE_READY" == "True" ]]; then ok "Expected node tce-k3s-01 is Ready"; else fail "Expected node tce-k3s-01 is not Ready"; fi
+  else fail "Expected Kubernetes node tce-k3s-01 is missing"; fi
   if k3s kubectl get ingressclass >/dev/null 2>&1; then ok "IngressClass inventory:"; k3s kubectl get ingressclass; else warn "Cannot inspect IngressClass"; fi
   if k3s kubectl get namespace ops-prod >/dev/null 2>&1; then
     ok "Production namespace ops-prod exists"
@@ -69,8 +80,10 @@ if has k3s; then
       for key in MCP_BOOTSTRAP_EMAIL MCP_BOOTSTRAP_PASSWORD MCP_OAUTH_SIGNING_PRIVATE_KEY MCP_OAUTH_SIGNING_KID; do
         grep -Fxq "$key" <<<"$OAUTH_KEYS" || MISSING+=("$key")
       done
-      if [[ "${#MISSING[@]}" -eq 0 ]]; then ok "OAuth Secret exists with all required keys (values not displayed)"; else warn "OAuth Secret is missing keys: ${MISSING[*]}"; fi
-    else warn "Required OAuth Secret mcp-oauth-secrets is missing"; fi
+      if [[ "${#MISSING[@]}" -eq 0 ]]; then ok "OAuth Secret exists with all required keys (values not displayed)"; else fail "OAuth Secret is missing required keys: ${MISSING[*]}"; fi
+    else fail "Required OAuth Secret mcp-oauth-secrets is missing"; fi
+
+    if k3s kubectl get storageclass local-path >/dev/null 2>&1; then ok "local-path StorageClass exists"; else fail "Required local-path StorageClass is missing"; fi
 
     if k3s kubectl -n ops-prod get pvc mcp-auth-data >/dev/null 2>&1; then
       PVC_PHASE="$(k3s kubectl -n ops-prod get pvc mcp-auth-data -o jsonpath='{.status.phase}' 2>/dev/null || true)"
@@ -80,10 +93,10 @@ if has k3s; then
         *) warn "OAuth database PVC mcp-auth-data phase: ${PVC_PHASE:-unknown}" ;;
       esac
     else warn "OAuth database PVC mcp-auth-data is not created yet"; fi
-  else warn "Production namespace ops-prod missing"; fi
+  else fail "Production namespace ops-prod missing"; fi
 
   ISSUER_READY="$(k3s kubectl get clusterissuer letsencrypt-prod -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
-  if [[ "$ISSUER_READY" == "True" ]]; then ok "letsencrypt-prod ClusterIssuer Ready"; else warn "letsencrypt-prod ClusterIssuer is not Ready"; fi
+  if [[ "$ISSUER_READY" == "True" ]]; then ok "letsencrypt-prod ClusterIssuer Ready"; else fail "letsencrypt-prod ClusterIssuer is not Ready"; fi
 else fail "k3s binary not found"; fi
 
 for target in / /var/lib/rancher/k3s; do
@@ -98,13 +111,16 @@ if getent ahosts mcp.mrcute.space >/dev/null 2>&1; then ok "DNS resolves mcp.mrc
 if getent group vps-mcp >/dev/null 2>&1; then
   GROUP_GID="$(getent group vps-mcp | cut -d: -f3)"
   if [[ "$GROUP_GID" == "34001" ]]; then ok "Socket group vps-mcp has GID 34001"; else fail "vps-mcp group GID is $GROUP_GID, expected 34001"; fi
-else warn "Socket group vps-mcp not installed yet"; fi
+else fail "Socket group vps-mcp is missing"; fi
 
 if systemctl is-active --quiet vps-root-agent; then
+  if [[ -d /run/vps-mcp ]]; then
+    if [[ "$(stat -c '%U:%g:%a' /run/vps-mcp)" == "root:34001:750" ]]; then ok "Root Agent socket directory is root:34001 mode 0750"; else fail "Root Agent socket directory must be root:34001 mode 0750"; fi
+  else fail "Root Agent socket directory is missing"; fi
   if [[ -S /run/vps-mcp/root-agent.sock ]]; then
-    if [[ "$(stat -c '%g' /run/vps-mcp/root-agent.sock)" == "34001" ]]; then ok "Root Agent active and socket group is GID 34001"; else fail "Root Agent socket group must be GID 34001"; fi
-  else warn "Root Agent service is active but its Unix socket is missing"; fi
-else warn "Root Agent service is not active"; fi
+    if [[ "$(stat -c '%U:%g:%a' /run/vps-mcp/root-agent.sock)" == "root:34001:660" ]]; then ok "Root Agent socket is root:34001 mode 0660"; else fail "Root Agent socket must be root:34001 mode 0660"; fi
+  else fail "Root Agent service is active but its Unix socket is missing"; fi
+else fail "Root Agent service is not active"; fi
 
 GHCR_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 https://ghcr.io/v2/ 2>/dev/null || true)"
 case "$GHCR_STATUS" in 200|401) ok "GHCR registry reachable (HTTP $GHCR_STATUS; authentication may be required)" ;; 403) warn "GHCR reachable but forbidden (HTTP 403)" ;; 000|"") warn "Cannot connect to GHCR" ;; *) warn "GHCR returned HTTP $GHCR_STATUS" ;; esac

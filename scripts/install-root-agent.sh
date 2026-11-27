@@ -25,10 +25,13 @@ if find "$INSTALL_DIR" -xdev \( -type d -o -type f \) \( ! -user root -o -perm /
   echo "Checkout contains non-root-owned or group/world-writable files" >&2
   exit 1
 fi
-if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]] \
-  && { sudo -u "$SUDO_USER" test -w /opt || sudo -u "$SUDO_USER" test -w "$INSTALL_DIR"; }; then
-  echo "The invoking SSH user must not be able to write the trusted checkout" >&2
-  exit 1
+if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+  for trusted_path in /opt "$INSTALL_DIR" "$INSTALL_DIR/.git" "$SCRIPT_DIR" "${BASH_SOURCE[0]}" "$INSTALL_DIR/scripts" "$INSTALL_DIR/apps" "$INSTALL_DIR/apps/root-agent" "$INSTALL_DIR/packages" "$INSTALL_DIR/packages/contracts" "$INSTALL_DIR/deploy" "$INSTALL_DIR/deploy/systemd" "$INSTALL_DIR/deploy/systemd/vps-root-agent.service" "$INSTALL_DIR/package.json" "$INSTALL_DIR/package-lock.json"; do
+    if [[ -e "$trusted_path" ]] && sudo -u "$SUDO_USER" test -w "$trusted_path"; then
+      echo "The invoking SSH user can write trusted installation path: $trusted_path" >&2
+      exit 1
+    fi
+  done
 fi
 
 # Install a checksum-verified Node 26 runtime inside this trusted checkout.
@@ -42,7 +45,15 @@ node_major="$("$NODE_BIN" -p 'Number(process.versions.node.split(".")[0])')"
 if [[ "$node_major" -ne 26 ]]; then echo "Isolated Node.js 26 is required."; exit 1; fi
 "$NPM_BIN" install --ignore-scripts --no-audit --no-fund
 "$NPM_BIN" run build
-getent group vps-mcp >/dev/null || groupadd --system --gid 34001 vps-mcp
+if getent group vps-mcp >/dev/null; then
+  GROUP_GID="$(getent group vps-mcp | cut -d: -f3)"
+  if [[ "$GROUP_GID" != "34001" ]]; then
+    echo "Existing vps-mcp group must use GID 34001 (found $GROUP_GID)" >&2
+    exit 1
+  fi
+else
+  groupadd --system --gid 34001 vps-mcp
+fi
 install -d -o root -g vps-mcp -m 0750 /run/vps-mcp
 install -m 0644 "$ROOT_DIR/deploy/systemd/vps-root-agent.service" /etc/systemd/system/vps-root-agent.service
 systemctl daemon-reload

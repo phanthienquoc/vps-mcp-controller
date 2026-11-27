@@ -20,14 +20,62 @@ jobs:
       - name: Checkout selected master revision
         uses: actions/checkout@v4
 
-      - name: Validate immutable source revision
+      - name: Validate immutable source and deployment gates
+        env:
+          MCP_OAUTH_PRODUCTION_READY: ${{ vars.MCP_OAUTH_PRODUCTION_READY }}
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_USER: ${{ vars.VPS_USER }}
+          VPS_SSH_PORT: ${{ vars.VPS_SSH_PORT || '22' }}
+          VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
         run: |
           set -euo pipefail
           [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$MCP_OAUTH_PRODUCTION_READY" = "true"
+          test -n "$VPS_HOST"
+          [[ "$VPS_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]
+          test -n "$VPS_USER"
+          [[ "$VPS_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          test "$VPS_USER" != "root"
+          test "$VPS_SSH_PORT" = "22"
+          test -n "$VPS_SSH_PRIVATE_KEY"
+          test -n "$VPS_KNOWN_HOSTS"
+          test -n "$GHCR_READ_TOKEN"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
+
+      - name: Configure strict SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+          VPS_HOST: ${{ vars.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/vps_deploy
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/vps_deploy ~/.ssh/known_hosts
+          ssh-keygen -y -f ~/.ssh/vps_deploy >/dev/null
+          ssh-keygen -F "$VPS_HOST" -f ~/.ssh/known_hosts >/dev/null
+          unset SSH_PRIVATE_KEY SSH_KNOWN_HOSTS
+
+      - name: Run read-only VPS preflight before publishing
+        env:
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_USER: ${{ vars.VPS_USER }}
+          VPS_SSH_PORT: ${{ vars.VPS_SSH_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          SSH=(ssh -i "$HOME/.ssh/vps_deploy" -p "$VPS_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts")
+          PREFLIGHT_OUTPUT="$("${SSH[@]}" "$VPS_USER@$VPS_HOST" "sudo -n /usr/local/sbin/vps-mcp-preflight")"
+          SUMMARY="$(printf '%s\n' "$PREFLIGHT_OUTPUT" | grep '^Summary:' | tail -n 1)"
+          test -n "$SUMMARY"
+          printf 'Read-only VPS preflight passed: %s\n' "$SUMMARY"
 
       - name: Build and publish immutable multi-architecture gateway image
         env:
@@ -35,25 +83,12 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          unset GHCR_TOKEN
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --file apps/mcp-gateway/Dockerfile \
             --tag ghcr.io/phanthienquoc/vps-mcp-controller:${GITHUB_SHA} \
             --push .
-
-      - name: Configure strict SSH
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
-        run: |
-          set -euo pipefail
-          test -n "$SSH_PRIVATE_KEY"
-          test -n "$SSH_KNOWN_HOSTS"
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/vps_deploy
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/vps_deploy ~/.ssh/known_hosts
-          ssh-keygen -y -f ~/.ssh/vps_deploy >/dev/null
 
       - name: Invoke root-owned deploy entrypoint
         env:
@@ -63,16 +98,12 @@ jobs:
           GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
         run: |
           set -euo pipefail
-          test -n "$VPS_HOST"
-          test -n "$VPS_USER"
-          test -n "$GHCR_READ_TOKEN"
-
-          SSH=(ssh -i ~/.ssh/vps_deploy -p "$VPS_SSH_PORT" \
+          SSH=(ssh -i "$HOME/.ssh/vps_deploy" -p "$VPS_SSH_PORT" \
             -o BatchMode=yes -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts)
-
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts")
           printf '%s' "$GHCR_READ_TOKEN" | "${SSH[@]}" "$VPS_USER@$VPS_HOST" \
             "sudo -n /usr/local/sbin/vps-mcp-deploy '$GITHUB_SHA'"
+          unset GHCR_READ_TOKEN
 
       - name: Deployment summary
         if: success()
