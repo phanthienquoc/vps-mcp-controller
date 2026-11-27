@@ -223,6 +223,17 @@ test("revokes a refresh token and rejects subsequent use", async () => {
   assert.equal((await afterRevoke.json()).error, "invalid_grant");
 });
 
+test("rejects browser login, consent and logout POSTs without an exact Origin", async () => {
+  for (const route of ["/oauth/login", "/oauth/consent", "/oauth/logout"]) {
+    const response = await fetch(baseUrl + route, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ transaction: "x".repeat(43) })
+    });
+    assert.equal(response.status, 403, route + " must reject missing Origin");
+  }
+});
+
 test("rejects DCR registrations with non-HTTPS or malformed redirect URIs", async () => {
   for (const redirectUri of ["http://client.example/callback", "javascript:alert(1)", "https://user:pass@client.example/callback"]) {
     const response = await fetch(baseUrl + "/oauth/register", {
