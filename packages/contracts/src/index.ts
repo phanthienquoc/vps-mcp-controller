@@ -1,6 +1,6 @@
 import { z } from "zod";
 const unitName = z.string().regex(/^[a-zA-Z0-9_.@-]{1,80}$/);
-export const operationSchema = z.discriminatedUnion("action", [
+export const operationSchema = z.union([
   z.object({ action: z.literal("host.status") }),
   z.object({ action: z.literal("systemd.status"), unit: unitName }),
   z.object({ action: z.literal("systemd.journal"), unit: unitName, lines: z.number().int().min(1).max(300).default(100) }),
