@@ -53,9 +53,6 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS oauth_rate_limits (
     bucket_key TEXT PRIMARY KEY, window_started INTEGER NOT NULL, hits INTEGER NOT NULL
   );
-  CREATE TABLE IF NOT EXISTS oauth_rate_limits (
-    bucket_key TEXT PRIMARY KEY, window_started INTEGER NOT NULL, hits INTEGER NOT NULL
-  );
 `);
 
 function hash(value: string): string {
