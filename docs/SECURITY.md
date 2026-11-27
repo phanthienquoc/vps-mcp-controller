@@ -11,6 +11,9 @@
 - Sessions, one-time authorization codes, registered clients and refresh-token families are persisted in SQLite on a dedicated PVC. Keep exactly one gateway replica.
 - Access tokens are RS256 JWTs with five-minute expiry and the required \`mcp:tools\` scope. Private signing key is supplied only through Kubernetes Secret; public key is served through JWKS.
 - Refresh tokens are opaque, stored hashed, rotate on every use and revoke their family on reuse.
+- Login and consent forms carry only a random, short-lived server-side authorization transaction handle; authorization parameters are never trusted from browser-submitted Base64 payloads.
+- Authorization transactions are stored hashed, expire after ten minutes, and are atomically consumed once on successful login or consent. Consent revalidates client, exact redirect URI, response type, PKCE S256 challenge, resource and scope before issuing a code.
+- Login and consent POSTs reject cross-site Fetch Metadata and mismatched Origin headers; the transaction handle is an additional CSRF defense.
 - Revoking a refresh token does not invalidate an already-issued access JWT immediately; the remaining maximum exposure is five minutes.
 - Bootstrap account is created once from runtime Secret values. This initial version has no user management, password reset/change UI or MFA; keep access restricted to one administrator until those controls exist.
 - Never commit credentials, password hashes, signing keys or token material. Do not expose secrets in logs.
