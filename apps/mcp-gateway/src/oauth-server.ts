@@ -162,7 +162,7 @@ export async function createLocalOAuthRouter() {
     const grants = req.body?.grant_types ?? ["authorization_code", "refresh_token"];
     const methods = req.body?.token_endpoint_auth_method ? [req.body.token_endpoint_auth_method] : ["none"];
     if (!Array.isArray(redirects) || redirects.length < 1 || redirects.length > 10
-        || !redirects.every((v: unknown) => typeof v === "string" && validRedirect(v))
+        || !redirects.every((v: unknown) => typeof v === "string" && isAllowedRedirectUri(v))
         || !Array.isArray(grants) || !grants.includes("authorization_code")
         || !Array.isArray(methods) || !methods.includes("none")) {
       return sendError(res, 400, "invalid_client_metadata");
