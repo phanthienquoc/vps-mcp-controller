@@ -31,12 +31,18 @@ if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]] \
   exit 1
 fi
 
-node_major="$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || echo 0)"
-if [[ "$node_major" -lt 26 ]]; then echo "Node.js 26+ is required."; exit 1; fi
-getent group vps-mcp >/dev/null || groupadd --system --gid 34001 vps-mcp
+# Install a checksum-verified Node 26 runtime inside this trusted checkout.
+# This does not install or modify a system-wide Node.js/npm package.
+bash "$INSTALL_DIR/scripts/install-node-runtime.sh"
+NODE_BIN="$INSTALL_DIR/runtime/node/bin/node"
+NPM_BIN="$INSTALL_DIR/runtime/node/bin/npm"
+export PATH="$INSTALL_DIR/runtime/node/bin:$PATH"
 cd "$INSTALL_DIR"
-npm install --no-audit --no-fund
-npm run build
+node_major="$("$NODE_BIN" -p 'Number(process.versions.node.split(".")[0])')"
+if [[ "$node_major" -ne 26 ]]; then echo "Isolated Node.js 26 is required."; exit 1; fi
+"$NPM_BIN" install --ignore-scripts --no-audit --no-fund
+"$NPM_BIN" run build
+getent group vps-mcp >/dev/null || groupadd --system --gid 34001 vps-mcp
 install -d -o root -g vps-mcp -m 0750 /run/vps-mcp
 install -m 0644 "$ROOT_DIR/deploy/systemd/vps-root-agent.service" /etc/systemd/system/vps-root-agent.service
 systemctl daemon-reload

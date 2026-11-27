@@ -26,14 +26,17 @@ jobs:
           [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
-      - name: Build and publish immutable gateway image
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and publish immutable multi-architecture gateway image
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           docker buildx build \
-            --platform linux/amd64 \
+            --platform linux/amd64,linux/arm64 \
             --file apps/mcp-gateway/Dockerfile \
             --tag ghcr.io/phanthienquoc/vps-mcp-controller:${GITHUB_SHA} \
             --push .
@@ -68,8 +71,6 @@ jobs:
             -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts)
 
-          # The SSH deploy user never fetches, checks out or writes repository files.
-          # The root-owned entrypoint verifies GITHUB_SHA against origin/master.
           printf '%s' "$GHCR_READ_TOKEN" | "${SSH[@]}" "$VPS_USER@$VPS_HOST" \
             "sudo -n /usr/local/sbin/vps-mcp-deploy '$GITHUB_SHA'"
 
@@ -81,4 +82,5 @@ jobs:
             echo "- Host: tce-k3s-01"
             echo "- Revision: ${GITHUB_SHA}"
             echo "- Image: ghcr.io/phanthienquoc/vps-mcp-controller:${GITHUB_SHA}"
+            echo "- Platforms: linux/amd64, linux/arm64"
           } >> "$GITHUB_STEP_SUMMARY"
