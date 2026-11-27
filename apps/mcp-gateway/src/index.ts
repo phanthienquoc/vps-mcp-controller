@@ -60,6 +60,7 @@ const handler = createMcpHandler(() => {
 });
 
 const app = createMcpExpressApp({ host: "0.0.0.0", allowedHosts: [publicHost] });
+app.use(express.json({ limit: "32kb" }));
 app.use(express.urlencoded({ extended: false, limit: "16kb" }));
 app.use(await createLocalOAuthRouter());
 app.get("/healthz", (_req, res) => res.status(200).json({ status: "ok", service: "vps-mcp-gateway" }));
