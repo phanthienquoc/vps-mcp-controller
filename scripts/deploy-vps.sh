@@ -32,15 +32,21 @@ if find "$REPO_DIR" -xdev \( -type d -o -type f \) \( ! -user root -o -perm /022
 fi
 
 DEPLOY_CALLER="${SUDO_USER:-}"
+if [[ ! -f "$0" || -L "$0" || "$(stat -c '%U:%G' "$0")" != "root:root" ]] || find "$0" -maxdepth 0 -perm /022 -print -quit | grep -q .; then
+  echo "Root deploy entrypoint must be a root-owned, non-writable regular file" >&2
+  exit 1
+fi
 if [[ -n "$DEPLOY_CALLER" && "$DEPLOY_CALLER" != "root" ]]; then
   if ! id "$DEPLOY_CALLER" >/dev/null 2>&1; then
     echo "Unable to resolve the SSH deploy caller" >&2
     exit 1
   fi
-  if sudo -u "$DEPLOY_CALLER" test -w /opt || sudo -u "$DEPLOY_CALLER" test -w "$REPO_DIR" || sudo -u "$DEPLOY_CALLER" test -w "$REPO_DIR/deploy/k3s"; then
-    echo "SSH deploy user must not be able to write the trusted checkout or manifests" >&2
-    exit 1
-  fi
+  for trusted_path in /opt "$REPO_DIR" "$REPO_DIR/.git" "$REPO_DIR/scripts" "$REPO_DIR/deploy" "$REPO_DIR/deploy/k3s" "$0"; do
+    if sudo -u "$DEPLOY_CALLER" test -w "$trusted_path"; then
+      echo "SSH deploy user can write trusted path: $trusted_path" >&2
+      exit 1
+    fi
+  done
 fi
 
 ORIGIN="$(git -C "$REPO_DIR" remote get-url origin)"
@@ -92,15 +98,28 @@ if [[ ! -S "$SOCKET" ]]; then
   echo "Root Agent socket is missing: $SOCKET" >&2
   exit 1
 fi
-if [[ "$(stat -c '%g' "$SOCKET")" != "34001" ]]; then
-  echo "Root Agent socket must be owned by group GID 34001" >&2
+SOCKET_META="$(stat -c '%U:%g:%a' "$SOCKET")"
+if [[ "$SOCKET_META" != "root:34001:660" ]]; then
+  echo "Root Agent socket must be root-owned, group GID 34001 and mode 0660" >&2
+  exit 1
+fi
+if [[ "$(stat -c '%U:%g:%a' /run/vps-mcp)" != "root:34001:750" ]]; then
+  echo "Root Agent socket directory must be root-owned, group GID 34001 and mode 0750" >&2
   exit 1
 fi
 
 "${KUBECTL[@]}" get nodes >/dev/null
-"${KUBECTL[@]}" apply -f "$MANIFEST_DIR/namespace.yaml"
+NODE_READY="$("${KUBECTL[@]}" get node tce-k3s-01 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+if [[ "$NODE_READY" != "True" ]]; then
+  echo "Expected Kubernetes node tce-k3s-01 is missing or not Ready; refusing deployment" >&2
+  exit 1
+fi
 
 OAUTH_SECRET="mcp-oauth-secrets"
+if ! "${KUBECTL[@]}" get namespace "$NAMESPACE" >/dev/null 2>&1; then
+  echo "Required namespace $NAMESPACE is missing; provision it before deployment" >&2
+  exit 1
+fi
 if ! "${KUBECTL[@]}" -n "$NAMESPACE" get secret "$OAUTH_SECRET" >/dev/null 2>&1; then
   echo "Required OAuth Secret $OAUTH_SECRET is missing; provision it out of band" >&2
   exit 1
@@ -117,13 +136,14 @@ if ! "${KUBECTL[@]}" get storageclass local-path >/dev/null 2>&1; then
   echo "Required StorageClass local-path is missing" >&2
   exit 1
 fi
-"${KUBECTL[@]}" apply -f "$MANIFEST_DIR/oauth-pvc.yaml"
 
 ISSUER_READY="$("${KUBECTL[@]}" get clusterissuer letsencrypt-prod -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
 if [[ "$ISSUER_READY" != "True" ]]; then
   echo "cert-manager ClusterIssuer letsencrypt-prod is not Ready" >&2
   exit 1
 fi
+"${KUBECTL[@]}" apply -f "$MANIFEST_DIR/namespace.yaml"
+"${KUBECTL[@]}" apply -f "$MANIFEST_DIR/oauth-pvc.yaml"
 "${KUBECTL[@]}" apply -f "$MANIFEST_DIR/certificate.yaml"
 "${KUBECTL[@]}" -n "$NAMESPACE" wait --for=condition=Ready certificate/mcp-mrcute-space --timeout=300s
 "${KUBECTL[@]}" -n "$NAMESPACE" get secret mcp-mrcute-space-tls >/dev/null
