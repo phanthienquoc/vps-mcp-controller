@@ -25,11 +25,14 @@
 
 ## Authentication policy — production only
 
-- No staging environment or staging credentials are supported.
-- Static bearer tokens are not accepted as production ChatGPT MCP authentication.
-- The production Kubernetes manifest does not inject the legacy static bearer secret; direct manifest application therefore cannot enable the legacy bearer verifier.
-- Public production access is blocked until OAuth 2.1 Authorization Code + PKCE (S256), protected-resource and authorization-server metadata, exact redirect URI validation, one-time authorization codes, short-lived audience- and scope-bound access tokens, JWKS/signing-key rotation, and revocation are implemented and tested.
-- OAuth state, code, consent, client registration and refresh/session data must use durable protected storage; secrets must be provisioned outside chat and outside source control.
+- The gateway is an OAuth 2.1 protected resource. The authorization server is external and must be explicitly selected and configured before deployment.
+- The gateway publishes RFC 9728 Protected Resource Metadata at `/.well-known/oauth-protected-resource`.
+- At startup it fetches the configured RFC 8414 authorization-server metadata URL and fails closed unless issuer matching is exact, HTTPS endpoints are present, authorization-code flow is supported and PKCE S256 is advertised.
+- MCP requests require signed JWT access tokens validated against the issuer's HTTPS JWKS endpoint, exact issuer and resource audience, allowed algorithms, required scopes, subject, issued-at and expiry claims.
+- Access tokens are limited to 15 minutes maximum lifetime. The gateway does not accept static bearer secrets or unsigned/opaque tokens.
+- Authorization codes, login, consent, client registration, signing-key rotation and revocation are responsibilities of the selected authorization server. Provider must support PKCE S256, public clients, resource/audience binding, short-lived JWT access tokens and key rotation.
+- The gateway does not yet implement a local authorization server, dynamic client registration, token introspection or immediate per-token revocation. These remain production review gates; short token lifetime does not replace revocation.
+- OAuth issuer, metadata URL, resource URL and required scopes are runtime configuration; no credentials belong in Git, manifests or ChatGPT. Provider credentials and signing keys remain exclusively in the provider's secret manager.
 - Never expose the gateway publicly with the bootstrap static bearer verifier.
 
 ## Autonomous tiers
