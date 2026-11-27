@@ -60,7 +60,7 @@ Required Environment secrets:
 - `VPS_KNOWN_HOSTS`
 - `GHCR_READ_TOKEN` with read-only package access.
 
-The workflow checks that all required variables/secrets are present before building or publishing, requires strict host-key verification, and runs `sudo -n /usr/local/sbin/vps-mcp-preflight` without logging host details. The root-owned entrypoint then verifies the requested SHA is reachable from `origin/master`, checks that Kubernetes node `tce-k3s-01` is Ready, and applies only manifests archived from that trusted checkout. The Gateway is pinned to that node because the Root Agent socket is a hostPath.
+The workflow checks that all required variables/secrets are present before building or publishing, requires `StrictHostKeyChecking=yes` with a pinned `known_hosts` entry, and runs `sudo -n /usr/local/sbin/vps-mcp-preflight` without logging host details. The root-owned entrypoint then verifies the requested SHA is reachable from `origin/master`, checks that Kubernetes node `tce-k3s-01` is Ready, and applies only manifests archived from that trusted checkout. The Gateway is pinned to that node because the Root Agent socket is a hostPath.
 
 Install the Root Agent and the root-owned deploy/preflight wrappers only through their reviewed installers and only after the user-run preflight has been inspected. Do not use ad-hoc SSH shell commands or direct `kubectl apply` for production deployment.
 
