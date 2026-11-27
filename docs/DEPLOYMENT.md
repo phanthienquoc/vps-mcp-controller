@@ -56,23 +56,22 @@ The root deploy entrypoint fetches origin/master, verifies that the requested fu
 
 ## 3. Create Kubernetes secrets
 
-Generate a strong gateway token locally; never paste it into chat or commit it:
+Create the namespace and generate a strong staging gateway token locally. The token is written to a mode-0600 temporary file rather than passed as a command-line argument; never paste it into ChatGPT or commit it:
 
 ~~~bash
-k3s kubectl create namespace ops-prod --dry-run=client -o yaml | k3s kubectl apply -f -
+sudo k3s kubectl create namespace ops-prod --dry-run=client -o yaml | sudo k3s kubectl apply -f -
 TOKEN_FILE="$(mktemp)"
 chmod 600 "$TOKEN_FILE"
 trap 'rm -f "$TOKEN_FILE"' EXIT
-read -rsp "Enter a staging gateway token: " MCP_TOKEN
-printf '\\n'
-printf '%s' "$MCP_TOKEN" > "$TOKEN_FILE"
-unset MCP_TOKEN
-k3s kubectl -n ops-prod create secret generic vps-mcp-secrets \\
-  --from-file=mcp-bearer-token="$TOKEN_FILE" \\
-  --dry-run=client -o yaml | k3s kubectl apply -f -
+openssl rand -hex 32 > "$TOKEN_FILE"
+sudo k3s kubectl -n ops-prod create secret generic vps-mcp-secrets \
+  --from-file=mcp-bearer-token="$TOKEN_FILE" \
+  --dry-run=client -o yaml | sudo k3s kubectl apply -f -
 rm -f "$TOKEN_FILE"
 trap - EXIT
 ~~~
+
+The deployment applies the Certificate resource using the existing letsencrypt-prod ClusterIssuer and waits up to five minutes for cert-manager to create mcp-mrcute-space-tls. Ensure the cloud network security list/NSG permits inbound TCP 80 and 443 to the VPS; restrict SSH TCP 22 to trusted source IPs.
 
 The deploy workflow streams the read-only GHCR credential to the root entrypoint over SSH stdin. The root script writes a temporary Docker config with mode 0600, creates the ghcr-pull imagePullSecret from that file, then removes the temporary config. The credential is never included in process arguments or printed to logs. Do not use a PAT with write/delete scopes.
 
