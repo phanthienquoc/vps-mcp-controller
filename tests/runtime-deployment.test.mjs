@@ -88,15 +88,17 @@ test("deploy workflow verifies non-root SSH, port 22, strict host key and truste
   assert.match(workflow, /VPS_USER" != "root"/);
   assert.match(workflow, /VPS_SSH_PORT" = "22"/);
   assert.match(workflow, /StrictHostKeyChecking=yes/);
-  assert.match(workflow, /get node tce-k3s-01/);
-  assert.match(workflow, /stat -c '%U:%G:%a'/);
-  assert.match(workflow, /vps-mcp-deploy/);
+  assert.match(workflow, /vps-mcp-deploy --preflight/);
+  assert.match(workflow, /GHCR_READ_TOKEN/);
 });
 
 test("root deploy entrypoint requires the exact tce-k3s-01 node to be Ready before applying manifests", async () => {
   const deploy = await read("../scripts/deploy-vps.sh");
+  const preflightMode = deploy.indexOf('if [[ "${1:-}" == "--preflight" ]]');
   const targetCheck = deploy.indexOf("get node tce-k3s-01");
   const firstApply = deploy.indexOf('apply -f "$MANIFEST_DIR/namespace.yaml"');
-  assert.ok(targetCheck >= 0 && firstApply > targetCheck);
+  assert.ok(preflightMode >= 0 && targetCheck > preflightMode);
+  assert.ok(firstApply > targetCheck);
+  assert.match(deploy, /Read-only deployment preflight passed for tce-k3s-01/);
   assert.match(deploy, /Expected Kubernetes node tce-k3s-01 is not Ready/);
 });
