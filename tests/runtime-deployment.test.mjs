@@ -39,3 +39,13 @@ test("publish and deploy workflows build both supported architectures", async ()
     assert.match(workflow, /setup-buildx-action/);
   }
 });
+
+test("deployment provisions TLS from the managed ClusterIssuer", async () => {
+  const deploy = await read("../scripts/deploy-vps.sh");
+  const certificate = await read("../deploy/k3s/certificate.yaml");
+  assert.match(deploy, /certificate\.yaml/);
+  assert.match(deploy, /wait --for=condition=Ready certificate\/mcp-mrcute-space/);
+  assert.match(certificate, /kind: Certificate/);
+  assert.match(certificate, /name: letsencrypt-prod/);
+  assert.match(certificate, /secretName: mcp-mrcute-space-tls/);
+});
