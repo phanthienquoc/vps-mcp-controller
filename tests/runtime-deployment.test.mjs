@@ -16,7 +16,7 @@ test("host Root Agent uses isolated Node runtime, not system Node", async () => 
   assert.match(runtimeInstaller, /latest-v26\.x/);
 });
 
-test("VPS preflight does not require system-wide Node or npm", async () => {
+test("VPS preflight documents isolated runtime and does not require system Node or npm", async () => {
   const preflight = await read("../scripts/preflight-vps.sh");
   assert.match(preflight, /host Node\/npm not required/);
   assert.match(preflight, /Isolated Node\.js/);
@@ -50,13 +50,28 @@ test("deployment provisions TLS from the managed ClusterIssuer", async () => {
   assert.match(certificate, /secretName: mcp-mrcute-space-tls/);
 });
 
-test("production deploy is blocked before any privileged mutation until OAuth is ready", async () => {
+test("production deploy validates Root Agent before cluster mutations", async () => {
   const deploy = await read("../scripts/deploy-vps.sh");
-  const guard = deploy.indexOf("Production deployment blocked: OAuth 2.1/PKCE");
-  const fetch = deploy.indexOf('git -C "$REPO_DIR" fetch');
-  assert.ok(guard > 0, "explicit production OAuth gate must exist");
-  assert.ok(fetch > guard, "OAuth gate must execute before fetching/applying deployment manifests");
-  assert.match(deploy, /exit 78/);
+  const agentGuard = deploy.indexOf('systemctl is-active --quiet vps-root-agent');
+  const socketGuard = deploy.indexOf('[[ ! -S "$SOCKET" ]]');
+  const firstApply = deploy.indexOf('"$' + '{KUBECTL[@]}" apply -f "$MANIFEST_DIR/namespace.yaml"');
+  assert.ok(agentGuard > 0, "Root Agent service gate must exist");
+  assert.ok(socketGuard > agentGuard, "socket gate must follow service gate");
+  assert.ok(firstApply > socketGuard, "Root Agent gates must run before any Kubernetes apply");
+});
+
+test("production deploy validates OAuth Secret before provisioning PVC and TLS", async () => {
+  const deploy = await read("../scripts/deploy-vps.sh");
+  const secretGuard = deploy.indexOf('get secret "$OAUTH_SECRET"');
+  const pvcApply = deploy.indexOf('apply -f "$MANIFEST_DIR/oauth-pvc.yaml"');
+  const certificateApply = deploy.indexOf('apply -f "$MANIFEST_DIR/certificate.yaml"');
+  assert.ok(secretGuard > 0, "OAuth Secret gate must exist");
+  assert.ok(pvcApply > secretGuard, "OAuth Secret gate must precede PVC provisioning");
+  assert.ok(certificateApply > pvcApply, "PVC provisioning must precede TLS certificate request");
+  assert.match(deploy, /MCP_BOOTSTRAP_EMAIL/);
+  assert.match(deploy, /MCP_BOOTSTRAP_PASSWORD/);
+  assert.match(deploy, /MCP_OAUTH_SIGNING_PRIVATE_KEY/);
+  assert.match(deploy, /MCP_OAUTH_SIGNING_KID/);
 });
 
 test("production deployment docs do not create a static bearer credential", async () => {
