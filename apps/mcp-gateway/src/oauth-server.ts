@@ -53,6 +53,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS oauth_rate_limits (
     bucket_key TEXT PRIMARY KEY, window_started INTEGER NOT NULL, hits INTEGER NOT NULL
   );
+  CREATE INDEX IF NOT EXISTS oauth_rate_limits_window_idx ON oauth_rate_limits(window_started);
 `);
 
 function hash(value: string): string {
@@ -98,7 +99,7 @@ function rateLimit(bucket: string, limit: number, windowSeconds: number) {
       return;
     }
     // Bound stale limiter state without a timer or unbounded per-request scan.
-    if (now % 300 === 0) {
+    if (now % 300 < 5) {
       db.prepare("DELETE FROM oauth_rate_limits WHERE window_started < ?").run(now - 24 * 60 * 60);
     }
     next();
