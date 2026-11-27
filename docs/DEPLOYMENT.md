@@ -7,14 +7,15 @@ Production-only. No Keycloak, no external identity provider and no static bearer
 The MCP Gateway hosts both the protected resource and a minimal authorization server at `https://mcp.mrcute.space`.
 
 - OAuth authorization server metadata: `/.well-known/oauth-authorization-server`
-- Protected resource metadata: `/.well-known/oauth-protected-resource`
+- Protected resource metadata for the `/mcp` resource: `/.well-known/oauth-protected-resource/mcp` (RFC 9728 path-specific URI).
+- Origin-level compatibility alias: `/.well-known/oauth-protected-resource`.
 - Authorization endpoint: `/oauth/authorize`
 - Token endpoint: `/oauth/token`
 - DCR endpoint: `/oauth/register`
 - JWKS endpoint: `/oauth/jwks.json`
 - Revocation endpoint: `/oauth/revoke`
 
-Authorization Code + PKCE S256 is required. ChatGPT's DCR flow is supported; CIMD is deliberately not advertised in this first version. Public clients use token endpoint auth method `none`. The resource parameter must equal `https://mcp.mrcute.space/mcp` and is copied into JWT audience.
+Authorization Code + PKCE S256 is required. ChatGPT's DCR flow is supported; CIMD is deliberately not advertised in this first version. Public clients use token endpoint auth method `none`. The resource parameter must equal `https://mcp.mrcute.space/mcp` and is copied into JWT audience. The MCP `401` Bearer challenge points to the path-specific metadata URI above. The Gateway serves both that path-specific URI and the origin-level compatibility alias.
 
 ## Required Kubernetes Secret
 
@@ -81,7 +82,7 @@ Encrypt the exported backup at rest, restrict access, store it outside the VPS/P
 
 - Login uses a single bootstrap administrator account. User creation, password reset/change UI, multi-user administration and MFA are not implemented.
 - Login attempts are throttled by IP/email in SQLite. Place the service behind the existing trusted HTTPS ingress and preserve a trustworthy client IP policy; do not blindly trust user-supplied forwarded headers.
-- DCR accepts HTTPS redirect URIs only and stores exact URI matches. The initial ChatGPT integration must be verified against the actual callback URI.
+- DCR accepts HTTPS redirect URIs only and stores exact URI matches. The ChatGPT callback-ID-specific URI is supported when supplied by the connector management UI; the exact concrete URI is preserved through DCR, consent redirect and token exchange. Do not guess or hardcode a callback ID. The actual ChatGPT integration must still be verified against the URI shown by the connector UI.
 - CIMD and `private_key_jwt` are not advertised or supported; the authorization server advertises DCR and public-client `none`.
 - Access JWTs last five minutes. Revoking refresh tokens does not immediately invalidate already-issued access tokens; they expire within five minutes.
 - Refresh tokens rotate on every use; reuse of a consumed token revokes its family.
@@ -89,7 +90,7 @@ Encrypt the exported backup at rest, restrict access, store it outside the VPS/P
 
 ## Before deployment
 
-The PR must pass Node 26 typecheck/build/tests, an OAuth protocol/security review and an end-to-end ChatGPT MCP authorization test. Confirm persistent volume availability and provision the Kubernetes Secret out of band. Do not install the Root Agent or deploy until separately authorized.
+The merged `master` revision has passed Node 26 CI (shell validation, typecheck, build and test suite). Production still requires an OAuth protocol/security review and an end-to-end ChatGPT MCP authorization test. Confirm persistent volume availability and provision the Kubernetes Secret out of band. Do not install the Root Agent or deploy until separately authorized.
 
 ## Approved deployment workflow gates
 
