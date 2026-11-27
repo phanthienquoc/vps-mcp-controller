@@ -12,6 +12,10 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
+# Fail closed: the gateway still uses a static bearer verifier and is not production ChatGPT OAuth.
+echo "Production deployment blocked: OAuth 2.1/PKCE and MCP authorization metadata are not implemented." >&2
+exit 78
+
 REPO_DIR="/opt/vps-mcp-controller"
 if [[ "$(stat -c '%U:%G' /opt)" != "root:root" ]] || find /opt -maxdepth 0 -perm /022 -print -quit | grep -q .; then
   echo "/opt must be root-owned and not group/world-writable" >&2
