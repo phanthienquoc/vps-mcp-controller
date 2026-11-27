@@ -8,7 +8,7 @@ Deployment has two privileged stages: install the host Root Agent and deploy the
 
 Before installation, have:
 
-- A trusted, root-owned Git checkout at /opt/vps-mcp-controller.
+- A root-owned, non-group/world-writable /opt directory and trusted Git checkout at /opt/vps-mcp-controller.
 - A dedicated SSH deploy user (not root) that has **no write access** to /opt/vps-mcp-controller, its .git directory, scripts or deployment manifests.
 - Node.js 26 Active LTS and npm on the host.
 - Working k3s admin access and at least 2 GB free on the filesystem hosting k3s/containerd.
