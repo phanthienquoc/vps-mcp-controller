@@ -9,6 +9,8 @@ import { importJWK, jwtVerify } from "jose";
 
 const dataDir = mkdtempSync(join(tmpdir(), "vps-mcp-oauth-lifecycle-"));
 const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const { publicKey: previousPublicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const previousJwk = { ...previousPublicKey.export({ format: "jwk" }), use: "sig", alg: "RS256", kid: "oauth-previous-test-key" };
 process.env.MCP_AUTH_DB_PATH = join(dataDir, "auth.sqlite");
 process.env.MCP_BOOTSTRAP_EMAIL = "admin@example.test";
 process.env.MCP_BOOTSTRAP_PASSWORD = "test-password-at-least-fourteen";
@@ -16,6 +18,7 @@ process.env.MCP_OAUTH_ISSUER = "https://mcp.mrcute.space";
 process.env.MCP_RESOURCE_URL = "https://mcp.mrcute.space/mcp";
 process.env.MCP_OAUTH_SIGNING_PRIVATE_KEY = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
 process.env.MCP_OAUTH_SIGNING_KID = "oauth-lifecycle-test-key";
+process.env.MCP_OAUTH_PREVIOUS_PUBLIC_KEYS = JSON.stringify([previousJwk]);
 
 const { createLocalOAuthRouter } = await import("../apps/mcp-gateway/dist/oauth-server.js");
 const { pkceS256 } = await import("../apps/mcp-gateway/dist/oauth-helpers.js");
@@ -91,7 +94,8 @@ async function authorizeAndGetCode(clientId) {
   });
   assert.equal(login.status, 303);
   const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
-  assert.match(cookie, /^mcp_session=/);
+  assert.match(cookie, /^__Host-mcp_session=/);
+  assert.match(login.headers.get("set-cookie") ?? "", /; HttpOnly; Secure; SameSite=Lax; Path=\/; Max-Age=28800$/);
   const consentPage = await fetch(new URL(login.headers.get("location"), baseUrl), { headers: { cookie } });
   assert.equal(consentPage.status, 200);
   const consentHtml = await consentPage.text();
@@ -148,8 +152,11 @@ test("publishes OAuth metadata and JWKS with the configured issuer and key id", 
   assert.equal(metadata.authorization_response_iss_parameter_supported, false);
 
   const jwks = await (await fetch(baseUrl + "/oauth/jwks.json")).json();
-  assert.equal(jwks.keys.length, 1);
+  assert.equal(jwks.keys.length, 2);
   assert.equal(jwks.keys[0].kid, "oauth-lifecycle-test-key");
+  assert.equal(jwks.keys[1].kid, "oauth-previous-test-key");
+  assert.equal(jwks.keys[1].d, undefined);
+  assert.ok(await importJWK(jwks.keys[1], "RS256"));
   assert.equal(jwks.keys[0].alg, "RS256");
   assert.equal(jwks.keys[0].use, "sig");
   assert.equal(jwks.keys[0].d, undefined);

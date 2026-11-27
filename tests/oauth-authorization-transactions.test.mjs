@@ -116,7 +116,7 @@ test("OAuth login and consent use tamper-resistant, same-origin, one-time transa
   assert.equal(loginRedirect.searchParams.get("redirect_uri"), "https://client.example/callback");
   const setCookie = login.headers.get("set-cookie") ?? "";
   const cookie = setCookie.split(";")[0];
-  assert.match(cookie, /^mcp_session=/);
+  assert.match(cookie, /^__Host-mcp_session=/);
 
   const consentPage = await fetch(loginRedirect, { headers: { cookie } });
   assert.equal(consentPage.status, 200);

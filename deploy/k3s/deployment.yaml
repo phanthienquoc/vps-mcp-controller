@@ -67,6 +67,12 @@ spec:
                 secretKeyRef:
                   name: mcp-oauth-secrets
                   key: MCP_OAUTH_SIGNING_KID
+            - name: MCP_OAUTH_PREVIOUS_PUBLIC_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-oauth-secrets
+                  key: MCP_OAUTH_PREVIOUS_PUBLIC_KEYS
+                  optional: true
           readinessProbe:
             httpGet:
               path: /healthz
