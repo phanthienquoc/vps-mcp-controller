@@ -13,6 +13,10 @@ if [[ "$(id -u)" -ne 0 ]]; then
 fi
 
 REPO_DIR="/opt/vps-mcp-controller"
+if [[ "$(stat -c '%U:%G' /opt)" != "root:root" ]] || find /opt -maxdepth 0 -perm /022 -print -quit | grep -q .; then
+  echo "/opt must be root-owned and not group/world-writable" >&2
+  exit 1
+fi
 EXPECTED_ORIGIN="https://github.com/phanthienquoc/vps-mcp-controller.git"
 if [[ ! -d "$REPO_DIR/.git" ]]; then
   echo "Trusted root-owned checkout missing at $REPO_DIR" >&2
@@ -33,7 +37,7 @@ if [[ -n "$DEPLOY_CALLER" && "$DEPLOY_CALLER" != "root" ]]; then
     echo "Unable to resolve the SSH deploy caller" >&2
     exit 1
   fi
-  if sudo -u "$DEPLOY_CALLER" test -w "$REPO_DIR" || sudo -u "$DEPLOY_CALLER" test -w "$REPO_DIR/deploy/k3s"; then
+  if sudo -u "$DEPLOY_CALLER" test -w /opt || sudo -u "$DEPLOY_CALLER" test -w "$REPO_DIR" || sudo -u "$DEPLOY_CALLER" test -w "$REPO_DIR/deploy/k3s"; then
     echo "SSH deploy user must not be able to write the trusted checkout or manifests" >&2
     exit 1
   fi
