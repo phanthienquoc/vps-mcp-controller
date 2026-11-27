@@ -37,6 +37,7 @@ bash "$INSTALL_DIR/scripts/install-node-runtime.sh"
 NODE_BIN="$INSTALL_DIR/runtime/node/bin/node"
 NPM_BIN="$INSTALL_DIR/runtime/node/bin/npm"
 export PATH="$INSTALL_DIR/runtime/node/bin:$PATH"
+cd "$INSTALL_DIR"
 node_major="$("$NODE_BIN" -p 'Number(process.versions.node.split(".")[0])')"
 if [[ "$node_major" -ne 26 ]]; then echo "Isolated Node.js 26 is required."; exit 1; fi
 "$NPM_BIN" install --no-audit --no-fund
