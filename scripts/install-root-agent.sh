@@ -40,7 +40,7 @@ export PATH="$INSTALL_DIR/runtime/node/bin:$PATH"
 cd "$INSTALL_DIR"
 node_major="$("$NODE_BIN" -p 'Number(process.versions.node.split(".")[0])')"
 if [[ "$node_major" -ne 26 ]]; then echo "Isolated Node.js 26 is required."; exit 1; fi
-"$NPM_BIN" install --no-audit --no-fund
+"$NPM_BIN" install --ignore-scripts --no-audit --no-fund
 "$NPM_BIN" run build
 getent group vps-mcp >/dev/null || groupadd --system --gid 34001 vps-mcp
 install -d -o root -g vps-mcp -m 0750 /run/vps-mcp
