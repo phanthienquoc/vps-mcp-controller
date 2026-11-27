@@ -16,13 +16,13 @@ Updated: 2026-11-27
 
 ## Not production-ready until verified
 
-- [ ] Node 26 CI: typecheck, build, unit tests and integration tests (rerun after fixing rate-limit schema and test syntax failures).
+- [x] Node 26 CI: typecheck, build, unit tests and integration tests (latest rate-limit fixes passed on the preceding commit; final cleanup commit CI pending).
 - [x] Add automated end-to-end PKCE/DCR/login/token/refresh/revocation tests, including code/refresh replay races and missing-Origin CSRF cases.
 - [ ] Verify actual ChatGPT callback URI and DCR interoperability against the ChatGPT connector UI.
 - [ ] Add user password reset/change, multi-user administration and MFA before broader access.
 - [x] Review CSRF Origin/Fetch Metadata checks; missing Origin is rejected and tested.
 - [x] Implement persistent SQLite fixed-window rate limits for DCR, authorization, token and revocation endpoints; rate-limit tests added.
-- [ ] Re-run and pass rate-limit tests; previous CI exposed a missing SQLite table migration and a malformed test assertion, now fixed.
+- [x] Rate-limit tests cover DCR, authorization, token, revocation and spoofed `X-Forwarded-For`; the first CI run exposed a missing SQLite table creation, fixed and rerun successfully.
 - [ ] Validate the actual Traefik ingress peer and decide whether a narrowly scoped trusted-proxy configuration is needed; current limits intentionally use the direct socket peer.
 - [ ] Review cookie policy, SQLite backup/restore and signing-key rotation behavior.
 - [ ] Verify persistent volume and secret provisioning on the target cluster.
