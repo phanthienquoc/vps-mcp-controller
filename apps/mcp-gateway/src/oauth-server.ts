@@ -30,7 +30,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS clients (
     client_id TEXT PRIMARY KEY, redirect_uris TEXT NOT NULL,
     grant_types TEXT NOT NULL DEFAULT '["authorization_code"]',
-    token_auth_method TEXT NOT NULL DEFAULT 'none', created_at INTEGER NOT NULL
+    token_auth_method TEXT NOT NULL DEFAULT 'none', client_name TEXT, created_at INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
@@ -58,6 +58,9 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS oauth_rate_limits_window_idx ON oauth_rate_limits(window_started);
 `);
 const clientColumns = db.prepare("PRAGMA table_info(clients)").all() as { name: string }[];
+if (!clientColumns.some((column) => column.name === "client_name")) {
+  db.exec("ALTER TABLE clients ADD COLUMN client_name TEXT");
+}
 if (!clientColumns.some((column) => column.name === "grant_types")) {
   db.exec("ALTER TABLE clients ADD COLUMN grant_types TEXT NOT NULL DEFAULT '[\"authorization_code\"]'");
   // Existing clients were created before grant types were persisted and could use refresh tokens.
@@ -184,18 +187,19 @@ function page(title: string, body: string): string {
 function sendError(res: Response, status: number, error: string, description?: string): void {
   res.status(status).json({ error, ...(description ? { error_description: description } : {}) });
 }
-function readClient(clientId: string): { redirect_uris: string[]; grant_types: string[]; token_auth_method: string } | null {
-  const row = db.prepare("SELECT redirect_uris,grant_types,token_auth_method FROM clients WHERE client_id=?").get(clientId) as
-    { redirect_uris: string; grant_types: string; token_auth_method: string } | undefined;
+function readClient(clientId: string): { redirect_uris: string[]; grant_types: string[]; token_auth_method: string; client_name: string | null } | null {
+  const row = db.prepare("SELECT redirect_uris,grant_types,token_auth_method,client_name FROM clients WHERE client_id=?").get(clientId) as
+    { redirect_uris: string; grant_types: string; token_auth_method: string; client_name: string | null } | undefined;
   if (row) return {
     redirect_uris: JSON.parse(row.redirect_uris),
     grant_types: JSON.parse(row.grant_types),
-    token_auth_method: row.token_auth_method
+    token_auth_method: row.token_auth_method,
+    client_name: row.client_name
   };
   return null;
 }
 
-async function resolveClient(clientId: string): Promise<{ redirect_uris: string[]; grant_types: string[]; token_auth_method: string } | null> {
+async function resolveClient(clientId: string): Promise<{ redirect_uris: string[]; grant_types: string[]; token_auth_method: string; client_name: string | null } | null> {
   // This server advertises client_id_metadata_document_supported=false.
   // Resolve only clients created through this server's DCR endpoint; do not
   // perform network fetches for unregistered client identifiers.
@@ -309,6 +313,7 @@ export async function createLocalOAuthRouter() {
 
   router.post("/oauth/register", rateLimit("dcr", configuredLimit("MCP_OAUTH_DCR_LIMIT", 20), 3600), async (req, res) => {
     const redirects = req.body?.redirect_uris;
+    const clientName = typeof req.body?.client_name === "string" ? req.body.client_name.trim() : "";
     const grants = req.body?.grant_types ?? ["authorization_code"];
     const responseTypes = req.body?.response_types ?? ["code"];
     const authMethod = req.body?.token_endpoint_auth_method ?? "none";
@@ -320,15 +325,17 @@ export async function createLocalOAuthRouter() {
         || !grants.every((v: unknown) => typeof v === "string" && supportedGrants.has(v))
         || new Set(grants).size !== grants.length || !grants.includes("authorization_code")
         || !Array.isArray(responseTypes) || responseTypes.length !== 1 || responseTypes[0] !== "code"
-        || authMethod !== "none") {
+        || authMethod !== "none"
+        || (req.body?.client_name !== undefined && (typeof req.body.client_name !== "string" || clientName.length < 1 || clientName.length > 100))) {
       return sendError(res, 400, "invalid_client_metadata");
     }
     const clientId = randomToken(24);
-    db.prepare("INSERT INTO clients(client_id,redirect_uris,grant_types,token_auth_method,created_at) VALUES(?,?,?,?,?)")
-      .run(clientId, JSON.stringify(redirects), JSON.stringify(grants), "none", Math.floor(Date.now() / 1000));
+    db.prepare("INSERT INTO clients(client_id,redirect_uris,grant_types,token_auth_method,client_name,created_at) VALUES(?,?,?,?,?,?)")
+      .run(clientId, JSON.stringify(redirects), JSON.stringify(grants), "none", clientName || null, Math.floor(Date.now() / 1000));
     res.status(201).json({
       client_id: clientId,
       client_id_issued_at: Math.floor(Date.now() / 1000),
+      ...(clientName ? { client_name: clientName } : {}),
       redirect_uris: redirects,
       grant_types: grants,
       response_types: ["code"],
@@ -347,7 +354,8 @@ export async function createLocalOAuthRouter() {
       return;
     }
     res.type("html").send(page("Authorize access",
-      "<p>Allow this client to access VPS monitoring and approved operations?</p>" +
+      "<p>Application: <strong>" + htmlEscape(validation.client.client_name ?? validation.clientId) + "</strong></p>" +
+      "<p>Allow this application to access VPS monitoring and approved operations?</p>" +
       "<p><small>Permission: " + SCOPE + "</small></p>" +
       '<form method="post" action="/oauth/consent"><input type="hidden" name="transaction" value="' +
       htmlEscape(transaction) + '"><button>Allow access</button></form>'));

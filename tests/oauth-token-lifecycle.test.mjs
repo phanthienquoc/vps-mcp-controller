@@ -56,11 +56,18 @@ async function postForm(path, values) {
   });
 }
 
-async function registerClient(redirectUri = "https://client.example/callback") {
+function escapeHtmlForTest(value) {
+  return value.replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[character]);
+}
+
+async function registerClient(redirectUri = "https://client.example/callback", clientName = "ChatGPT VPS Connector") {
   const response = await fetch(baseUrl + "/oauth/register", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
+      client_name: clientName,
       redirect_uris: [redirectUri],
       grant_types: ["authorization_code", "refresh_token"],
       token_endpoint_auth_method: "none"
@@ -70,7 +77,7 @@ async function registerClient(redirectUri = "https://client.example/callback") {
   return (await response.json()).client_id;
 }
 
-async function authorizeAndGetCode(clientId, redirectUri = "https://client.example/callback") {
+async function authorizeAndGetCode(clientId, redirectUri = "https://client.example/callback", expectedClientName = "ChatGPT VPS Connector") {
   const verifier = randomBytes(32).toString("base64url");
   const challenge = pkceS256(verifier);
   const params = new URLSearchParams({
@@ -101,6 +108,7 @@ async function authorizeAndGetCode(clientId, redirectUri = "https://client.examp
   const consentPage = await fetch(new URL(login.headers.get("location"), baseUrl), { headers: { cookie } });
   assert.equal(consentPage.status, 200);
   const consentHtml = await consentPage.text();
+  assert.ok(consentHtml.includes(`Application: <strong>${escapeHtmlForTest(expectedClientName)}</strong>`));
   const consentTransaction = consentHtml.match(/name="transaction" value="([A-Za-z0-9_-]{43})"/)?.[1];
   assert.ok(consentTransaction, "consent form must contain an opaque transaction handle");
 
@@ -120,7 +128,7 @@ async function authorizeAndGetCode(clientId, redirectUri = "https://client.examp
   assert.equal(callback.pathname, new URL(redirectUri).pathname);
   assert.equal(callback.searchParams.get("state"), "lifecycle-state");
   assert.equal(callback.searchParams.get("iss"), issuer);
-  return { code: callback.searchParams.get("code"), verifier };
+  return { code: callback.searchParams.get("code"), verifier, consentHtml };
 }
 
 async function exchangeCode(clientId, code, verifier, redirectUri = "https://client.example/callback") {
@@ -389,6 +397,26 @@ test("concurrent refresh-token reuse revokes the token family", async () => {
 });
 
 
+test("DCR rejects empty or oversized client display names", async () => {
+  for (const client_name of ["", "x".repeat(101)]) {
+    const response = await fetch(baseUrl + "/oauth/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ client_name, redirect_uris: ["https://client.example/callback"] })
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error, "invalid_client_metadata");
+  }
+});
+
+test("escapes registered client names on the consent screen", async () => {
+  const displayName = '<img src=x onerror="alert(1)">';
+  const clientId = await registerClient("https://client.example/callback", displayName);
+  const { consentHtml } = await authorizeAndGetCode(clientId, "https://client.example/callback", displayName);
+  assert.ok(consentHtml.includes('Application: <strong>&lt;img src=x onerror=&quot;alert(1)&quot;&gt;</strong>'));
+  assert.doesNotMatch(consentHtml, /<img src=x/);
+});
+
 test("DCR follows RFC 7591 default grant and enforces registered grant types", async () => {
   const registration = await fetch(baseUrl + "/oauth/register", {
     method: "POST",
@@ -399,7 +427,7 @@ test("DCR follows RFC 7591 default grant and enforces registered grant types", a
   const client = await registration.json();
   assert.deepEqual(client.grant_types, ["authorization_code"]);
 
-  const { code, verifier } = await authorizeAndGetCode(client.client_id);
+  const { code, verifier } = await authorizeAndGetCode(client.client_id, "https://client.example/callback", client.client_id);
   const access = await exchangeCode(client.client_id, code, verifier);
   assert.equal(access.status, 200);
   const tokens = await access.json();
