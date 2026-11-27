@@ -257,10 +257,9 @@ test("concurrent refresh-token reuse revokes the token family", async () => {
     exchangeRefresh(clientId, tokens.refresh_token)
   ]);
   assert.deepEqual(responses.map((response) => response.status).sort(), [200, 400]);
-  const successful = await responses.find(async (response) => response.status === 200)?.json();
   // The reused token invalidates the complete family, including the winning rotated token.
   const bodies = await Promise.all(responses.map(async (response) => response.status === 200 ? response.json() : null));
-  const rotated = bodies.find(Boolean) ?? successful;
+  const rotated = bodies.find(Boolean);
   assert.ok(rotated?.refresh_token);
   const familyRevoked = await exchangeRefresh(clientId, rotated.refresh_token);
   assert.equal(familyRevoked.status, 400);
