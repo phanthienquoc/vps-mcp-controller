@@ -69,6 +69,16 @@ function safeEqual(a: string, b: string): boolean {
   const bb = Buffer.from(b);
   return aa.length === bb.length && timingSafeEqual(aa, bb);
 }
+function configuredLimit(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > 1_000_000) {
+    throw new Error(`${name} must be an integer between 1 and 1000000`);
+  }
+  return value;
+}
+
 function rateLimit(bucket: string, limit: number, windowSeconds: number) {
   return (req: Request, res: Response, next: (error?: unknown) => void): void => {
     // Express trust proxy remains disabled by default. req.ip therefore comes
@@ -265,7 +275,7 @@ export async function createLocalOAuthRouter() {
   router.get("/.well-known/oauth-authorization-server", (_req, res) => res.json(authMetadata));
   router.get("/oauth/jwks.json", (_req, res) => res.json(jwks));
 
-  router.post("/oauth/register", rateLimit("dcr", Number(process.env.MCP_OAUTH_DCR_LIMIT ?? 20), 3600), async (req, res) => {
+  router.post("/oauth/register", rateLimit("dcr", configuredLimit("MCP_OAUTH_DCR_LIMIT", 20), 3600), async (req, res) => {
     const redirects = req.body?.redirect_uris;
     const grants = req.body?.grant_types ?? ["authorization_code", "refresh_token"];
     const methods = req.body?.token_endpoint_auth_method ? [req.body.token_endpoint_auth_method] : ["none"];
@@ -288,7 +298,7 @@ export async function createLocalOAuthRouter() {
     });
   });
 
-  router.get("/oauth/authorize", rateLimit("authorize", Number(process.env.MCP_OAUTH_AUTHORIZE_LIMIT ?? 120), 900), async (req, res) => {
+  router.get("/oauth/authorize", rateLimit("authorize", configuredLimit("MCP_OAUTH_AUTHORIZE_LIMIT", 120), 900), async (req, res) => {
     const p = requestParams(req);
     const validation = await validateAuthorizationRequest(p);
     if (!validation.ok) return sendError(res, validation.status, validation.error, validation.description);
@@ -371,7 +381,7 @@ export async function createLocalOAuthRouter() {
     res.redirect(303, target.toString());
   });
 
-  router.post("/oauth/token", rateLimit("token", Number(process.env.MCP_OAUTH_TOKEN_LIMIT ?? 60), 60), async (req, res) => {
+  router.post("/oauth/token", rateLimit("token", configuredLimit("MCP_OAUTH_TOKEN_LIMIT", 60), 60), async (req, res) => {
     const grant = String(req.body?.grant_type ?? "");
     const clientId = String(req.body?.client_id ?? "");
     const client = await resolveClient(clientId).catch(() => null);
@@ -428,7 +438,7 @@ export async function createLocalOAuthRouter() {
     sendError(res, 400, "unsupported_grant_type");
   });
 
-  router.post("/oauth/revoke", rateLimit("revoke", Number(process.env.MCP_OAUTH_REVOKE_LIMIT ?? 30), 60), (req, res) => {
+  router.post("/oauth/revoke", rateLimit("revoke", configuredLimit("MCP_OAUTH_REVOKE_LIMIT", 30), 60), (req, res) => {
     const token = String(req.body?.token ?? "");
     db.prepare("DELETE FROM refresh_tokens WHERE token_hash=?").run(hash(token));
     res.status(200).end();
