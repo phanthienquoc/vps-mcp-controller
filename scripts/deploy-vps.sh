@@ -7,16 +7,69 @@ if [[ ! "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
   echo "Usage: vps-mcp-deploy <40-character-commit-sha>" >&2
   exit 2
 fi
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "The deploy entrypoint must run as root" >&2
+  exit 1
+fi
+
+REPO_DIR="/opt/vps-mcp-controller"
+EXPECTED_ORIGIN="https://github.com/phanthienquoc/vps-mcp-controller.git"
+if [[ ! -d "$REPO_DIR/.git" ]]; then
+  echo "Trusted root-owned checkout missing at $REPO_DIR" >&2
+  exit 1
+fi
+if [[ "$(stat -c '%U:%G' "$REPO_DIR")" != "root:root" ]]; then
+  echo "Repository checkout must be owned by root:root" >&2
+  exit 1
+fi
+if find "$REPO_DIR" -xdev \( -type d -o -type f \) \( ! -user root -o -perm /022 \) -print -quit | grep -q .; then
+  echo "Repository contains non-root-owned or group/world-writable files" >&2
+  exit 1
+fi
+
+DEPLOY_CALLER="${SUDO_USER:-}"
+if [[ -n "$DEPLOY_CALLER" && "$DEPLOY_CALLER" != "root" ]]; then
+  if ! id "$DEPLOY_CALLER" >/dev/null 2>&1; then
+    echo "Unable to resolve the SSH deploy caller" >&2
+    exit 1
+  fi
+  if sudo -u "$DEPLOY_CALLER" test -w "$REPO_DIR" || sudo -u "$DEPLOY_CALLER" test -w "$REPO_DIR/deploy/k3s"; then
+    echo "SSH deploy user must not be able to write the trusted checkout or manifests" >&2
+    exit 1
+  fi
+fi
+
+ORIGIN="$(git -C "$REPO_DIR" remote get-url origin)"
+if [[ "$ORIGIN" != "$EXPECTED_ORIGIN" ]]; then
+  echo "Unexpected origin for trusted deployment checkout" >&2
+  exit 1
+fi
+
+git -C "$REPO_DIR" fetch --no-tags --prune origin +refs/heads/master:refs/remotes/origin/master
+if ! git -C "$REPO_DIR" cat-file -e "${SHA}^{commit}" 2>/dev/null; then
+  echo "Requested revision is not present in the trusted checkout" >&2
+  exit 1
+fi
+if ! git -C "$REPO_DIR" merge-base --is-ancestor "$SHA" refs/remotes/origin/master; then
+  echo "Requested revision is not reachable from origin/master" >&2
+  exit 1
+fi
+
+TMP="$(mktemp -d)"
+trap 'rm -rf -- "$TMP"' EXIT
+git -C "$REPO_DIR" archive --format=tar "$SHA" deploy/k3s | tar -xf - -C "$TMP"
+MANIFEST_DIR="$TMP/deploy/k3s"
+for manifest in namespace.yaml deployment.yaml service.yaml ingress.yaml; do
+  if [[ ! -f "$MANIFEST_DIR/$manifest" || -L "$MANIFEST_DIR/$manifest" ]]; then
+    echo "Trusted revision is missing a regular deploy/k3s/$manifest manifest" >&2
+    exit 1
+  fi
+done
 
 KUBECTL=(k3s kubectl)
 NAMESPACE="ops-prod"
 DEPLOYMENT="vps-mcp-gateway"
 IMAGE="ghcr.io/phanthienquoc/vps-mcp-controller:$SHA"
-MANIFEST_DIR="/opt/vps-mcp-controller/deploy/k3s"
-TMP="$(mktemp -d)"
-HAD_DEPLOYMENT=0
-cleanup(){ rm -rf "$TMP"; }
-trap cleanup EXIT
 
 if ! systemctl is-active --quiet vps-root-agent; then
   echo "vps-root-agent is not active; refusing deployment" >&2
@@ -24,10 +77,6 @@ if ! systemctl is-active --quiet vps-root-agent; then
 fi
 if [[ ! -S /run/vps-mcp/root-agent.sock ]]; then
   echo "Root Agent socket is missing" >&2
-  exit 1
-fi
-if [[ ! -f "$MANIFEST_DIR/deployment.yaml" ]]; then
-  echo "Deployment manifests not found at $MANIFEST_DIR" >&2
   exit 1
 fi
 
@@ -38,16 +87,39 @@ fi
 # The workflow streams the read-only GHCR credential over SSH stdin, never as an argument.
 GHCR_TOKEN="$(cat)"
 if [[ -n "$GHCR_TOKEN" ]]; then
-  "${KUBECTL[@]}" -n "$NAMESPACE" create secret docker-registry ghcr-pull \
-    --docker-server=ghcr.io \
-    --docker-username=phanthienquoc \
-    --docker-password="$GHCR_TOKEN" \
-    --dry-run=client -o yaml | "${KUBECTL[@]}" apply -f -
+  DOCKER_CONFIG_DIR="$TMP/docker-config"
+  install -d -m 0700 "$DOCKER_CONFIG_DIR"
+  GHCR_TOKEN="$GHCR_TOKEN" python3 - "$DOCKER_CONFIG_DIR/config.json" <<'PY'
+import base64
+import json
+import os
+import sys
+
+token = os.environ.get("GHCR_TOKEN", "")
+if not token:
+    raise SystemExit("GHCR token was not supplied")
+
+auth = base64.b64encode(f"phanthienquoc:{token}".encode("utf-8")).decode("ascii")
+fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as handle:
+    json.dump({"auths": {"ghcr.io": {"auth": auth}}}, handle)
+    handle.write("\n")
+PY
   unset GHCR_TOKEN
+  if [[ "$(stat -c '%a' "$DOCKER_CONFIG_DIR/config.json")" != "600" ]]; then
+    echo "Temporary Docker config permissions are not mode 0600" >&2
+    exit 1
+  fi
+  "${KUBECTL[@]}" -n "$NAMESPACE" create secret generic ghcr-pull \
+    --type=kubernetes.io/dockerconfigjson \
+    --from-file=.dockerconfigjson="$DOCKER_CONFIG_DIR/config.json" \
+    --dry-run=client -o yaml | "${KUBECTL[@]}" apply -f -
+  rm -rf -- "$DOCKER_CONFIG_DIR"
 else
   "${KUBECTL[@]}" -n "$NAMESPACE" get secret ghcr-pull >/dev/null
 fi
 
+HAD_DEPLOYMENT=0
 if "${KUBECTL[@]}" -n "$NAMESPACE" get deployment "$DEPLOYMENT" >/dev/null 2>&1; then
   HAD_DEPLOYMENT=1
 fi
