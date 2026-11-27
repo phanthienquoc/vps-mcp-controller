@@ -23,7 +23,7 @@ If the trusted checkout does not yet exist, stop and report that fact. Do not cl
 ## Production prerequisites (once OAuth gate is cleared)
 
 - Trusted root-owned checkout at `/opt/vps-mcp-controller`; deploy SSH user cannot write it.
-- Dedicated non-root SSH deploy account; GitHub Actions is the only deployment path.
+- Dedicated non-root SSH deploy account; GitHub Actions is the only deployment path. `VPS_USER` in the GitHub Environment must be the same pre-created account supplied as `VPS_DEPLOY_USER` during bootstrap.
 - Node.js 26 runtime isolated under the trusted checkout; no system-wide Node/npm requirement.
 - k3s reachable, at least 2 GiB free on relevant filesystems, DNS `mcp.mrcute.space` pointing to the VPS.
 - cert-manager ClusterIssuer `letsencrypt-prod` Ready; ingress TCP 80/443 reachable.
