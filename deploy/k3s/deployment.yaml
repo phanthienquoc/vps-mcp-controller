@@ -16,6 +16,8 @@ spec:
         app: vps-mcp-gateway
     spec:
       automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: tce-k3s-01
       imagePullSecrets:
         - name: ghcr-pull
       securityContext:
