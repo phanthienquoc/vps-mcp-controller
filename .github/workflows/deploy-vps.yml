@@ -39,7 +39,7 @@ jobs:
             exit 1
           }
           [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail_gate "GITHUB_SHA must be an immutable 40-character commit SHA"
-          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]] || fail_gate "checkout does not match GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || fail_gate "checkout does not match GITHUB_SHA"
 
           CI_RUNS="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" -f head_sha="$GITHUB_SHA" -f branch=master -F per_page=50)"
           CI_RUN="$(jq -c --arg sha "$GITHUB_SHA" '[.workflow_runs[] | select(.head_sha == $sha and .head_branch == "master" and .event == "push")] | sort_by(.created_at) | last // empty' <<< "$CI_RUNS")"
@@ -52,13 +52,13 @@ jobs:
           echo "Verified successful CI run $(jq -r '.id' <<< "$CI_RUN") for the selected immutable commit."
 
           [[ "$MCP_OAUTH_PRODUCTION_READY" == "true" ]] || fail_gate "MCP_OAUTH_PRODUCTION_READY must be true after the documented OAuth review"
-          [[ "$VPS_TARGET_ID" == "tce-k3s-01" ]] || fail_gate "VPS_TARGET_ID must equal tce-k3s-01"
+          test "$VPS_TARGET_ID" = "tce-k3s-01" || fail_gate "VPS_TARGET_ID must equal tce-k3s-01"
           [[ -n "$VPS_HOST" ]] || fail_gate "VPS_HOST is not available in the tce-k3s-01 Environment"
           [[ "$VPS_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || fail_gate "VPS_HOST must be a valid hostname"
           [[ -n "$VPS_USER" ]] || fail_gate "VPS_USER is not available in the tce-k3s-01 Environment"
           [[ "$VPS_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || fail_gate "VPS_USER must be a valid non-root account name"
-          [[ "$VPS_USER" != "root" ]] || fail_gate "VPS_USER must not be root"
-          [[ "$VPS_SSH_PORT" == "22" ]] || fail_gate "VPS_SSH_PORT must be 22"
+          test "$VPS_USER" != "root" || fail_gate "VPS_USER must not be root"
+          test "$VPS_SSH_PORT" = "22" || fail_gate "VPS_SSH_PORT must be 22"
           [[ -n "$VPS_SSH_PRIVATE_KEY" ]] || fail_gate "VPS_SSH_PRIVATE_KEY is not available in the tce-k3s-01 Environment"
           [[ -n "$VPS_KNOWN_HOSTS" ]] || fail_gate "VPS_KNOWN_HOSTS is not available in the tce-k3s-01 Environment"
           [[ -n "$GHCR_READ_TOKEN" ]] || fail_gate "GHCR_READ_TOKEN is not available in the tce-k3s-01 Environment"
