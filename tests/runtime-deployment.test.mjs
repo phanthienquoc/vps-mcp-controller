@@ -95,10 +95,21 @@ test("deploy workflow verifies non-root SSH, port 22, strict host key and truste
 test("root deploy entrypoint requires the exact tce-k3s-01 node to be Ready before applying manifests", async () => {
   const deploy = await read("../scripts/deploy-vps.sh");
   const preflightMode = deploy.indexOf('if [[ "${1:-}" == "--preflight" ]]');
+  const shaValidation = deploy.indexOf('if [[ ! "$SHA" =~');
   const targetCheck = deploy.indexOf("get node tce-k3s-01");
   const firstApply = deploy.indexOf('apply -f "$MANIFEST_DIR/namespace.yaml"');
-  assert.ok(preflightMode >= 0 && targetCheck > preflightMode);
+  assert.ok(preflightMode >= 0 && shaValidation > preflightMode, "read-only preflight mode must be handled before SHA validation");
+  assert.ok(targetCheck > preflightMode);
   assert.ok(firstApply > targetCheck);
   assert.match(deploy, /Read-only deployment preflight passed for tce-k3s-01/);
   assert.match(deploy, /Expected Kubernetes node tce-k3s-01 is not Ready/);
+});
+
+
+test("Root Agent installer installs a root-owned deploy entrypoint for an explicit non-root deploy user", async () => {
+  const installer = await read("../scripts/install-root-agent.sh");
+  assert.match(installer, /VPS_DEPLOY_USER/);
+  assert.match(installer, /install -o root -g root -m 0750 .*deploy-vps\\.sh/);
+  assert.match(installer, /NOPASSWD: \\/usr\\/local\\/sbin\\/vps-mcp-deploy \\*/);
+  assert.match(installer, /visudo -cf/);
 });
