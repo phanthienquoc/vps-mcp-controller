@@ -12,6 +12,88 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
+if [[ "${1:-}" == "--preflight" ]]; then
+  REPO_DIR="/opt/vps-mcp-controller"
+  EXPECTED_ORIGIN="https://github.com/phanthienquoc/vps-mcp-controller.git"
+  SELF_PATH="$(readlink -f -- "$0")"
+  RUNTIME_NODE="$REPO_DIR/runtime/node/bin/node"
+  RUNTIME_NPM="$REPO_DIR/runtime/node/bin/npm"
+  KUBECTL=(k3s kubectl)
+
+  fail_preflight() {
+    echo "Preflight failed: $1" >&2
+    exit 1
+  }
+
+  check_trusted_path() {
+    local path="$1"
+    local metadata owner group mode mode_value
+    [[ -e "$path" && ! -L "$path" ]] || fail_preflight "Missing or symlinked trusted path: $path"
+    metadata="$(stat -c '%U:%G:%a' "$path")"
+    IFS=: read -r owner group mode <<< "$metadata"
+    [[ "$owner:$group" == "root:root" && "$mode" =~ ^[0-7]{3,4}$ ]] || fail_preflight "Path is not root:root owned or has invalid mode: $path"
+    mode_value=$((8#$mode))
+    (( (mode_value & 0022) == 0 )) || fail_preflight "Path is group/world-writable: $path"
+  }
+
+  for path in \
+    /opt \
+    "$REPO_DIR" \
+    "$REPO_DIR/.git" \
+    "$REPO_DIR/deploy/k3s" \
+    "$REPO_DIR/deploy/k3s/deployment.yaml" \
+    "$REPO_DIR/scripts/deploy-vps.sh" \
+    "$SELF_PATH"; do
+    check_trusted_path "$path"
+  done
+
+  CHECKOUT_VIOLATION="$(find "$REPO_DIR" -xdev \( -type d -o -type f \) \( ! -user root -o -perm /022 \) -print -quit)"
+  [[ -z "$CHECKOUT_VIOLATION" ]] || fail_preflight "Checkout contains non-root-owned or group/world-writable paths"
+
+  DEPLOY_CALLER="${SUDO_USER:-}"
+  if [[ -n "$DEPLOY_CALLER" && "$DEPLOY_CALLER" != "root" ]]; then
+    if sudo -u "$DEPLOY_CALLER" test -w /opt \
+      || sudo -u "$DEPLOY_CALLER" test -w "$REPO_DIR" \
+      || sudo -u "$DEPLOY_CALLER" test -w "$REPO_DIR/deploy/k3s" \
+      || sudo -u "$DEPLOY_CALLER" test -w "$SELF_PATH"; then
+      fail_preflight "SSH deploy user can write a trusted deployment path"
+    fi
+  fi
+
+  ORIGIN="$(git -C "$REPO_DIR" remote get-url origin)"
+  [[ "$ORIGIN" == "$EXPECTED_ORIGIN" ]] || fail_preflight "Unexpected trusted checkout origin"
+
+  [[ -x "$RUNTIME_NODE" && -x "$RUNTIME_NPM" ]] || fail_preflight "Isolated Node.js 26 runtime is missing"
+  NODE_MAJOR="$("$RUNTIME_NODE" -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || echo 0)"
+  [[ "$NODE_MAJOR" -eq 26 ]] || fail_preflight "Isolated Node.js runtime must be major version 26"
+
+  systemctl is-active --quiet vps-root-agent || fail_preflight "vps-root-agent is not active"
+  [[ -S /run/vps-mcp/root-agent.sock ]] || fail_preflight "Root Agent socket is missing"
+
+  NODE_READY="$("${KUBECTL[@]}" get node tce-k3s-01 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+  [[ "$NODE_READY" == "True" ]] || fail_preflight "Expected Kubernetes node tce-k3s-01 is not Ready"
+  "${KUBECTL[@]}" get namespace ops-prod >/dev/null 2>&1 || fail_preflight "Production namespace ops-prod is missing"
+
+  ISSUER_READY="$("${KUBECTL[@]}" get clusterissuer letsencrypt-prod -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+  [[ "$ISSUER_READY" == "True" ]] || fail_preflight "ClusterIssuer letsencrypt-prod is not Ready"
+
+  for target in / /var/lib/rancher/k3s; do
+    if [[ -e "$target" ]]; then
+      AVAILABLE_KB="$(df -Pk "$target" | awk 'NR==2 {print $4}')"
+      [[ -n "$AVAILABLE_KB" && "$AVAILABLE_KB" -ge 2097152 ]] || fail_preflight "Less than 2 GiB free on $target"
+    fi
+  done
+
+  GHCR_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 https://ghcr.io/v2/ 2>/dev/null || true)"
+  case "$GHCR_STATUS" in
+    200|401) ;;
+    *) fail_preflight "GHCR registry is not reachable (HTTP ${GHCR_STATUS:-000})" ;;
+  esac
+
+  echo "Read-only deployment preflight passed for tce-k3s-01"
+  exit 0
+fi
+
 # Fail closed: the gateway still uses a static bearer verifier and is not production ChatGPT OAuth.
 echo "Production deployment blocked: OAuth 2.1/PKCE and MCP authorization metadata are not implemented." >&2
 exit 78
