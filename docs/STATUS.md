@@ -21,7 +21,8 @@ Updated: 2026-11-27
 - [ ] Verify actual ChatGPT callback URI and DCR interoperability against the ChatGPT connector UI.
 - [ ] Add user password reset/change, multi-user administration and MFA before broader access.
 - [x] Review CSRF Origin/Fetch Metadata checks; missing Origin is rejected and tested.
-- [ ] Add global rate limits for DCR/token/authorization endpoints; validate ingress proxy/IP behavior before relying on client IP throttling.
+- [x] Add persistent SQLite fixed-window rate limits for DCR, authorization, token and revocation endpoints; test spoofed `X-Forwarded-For` cannot bypass limits when proxy trust is disabled.
+- [ ] Validate the actual Traefik ingress peer and decide whether a narrowly scoped trusted-proxy configuration is needed; current limits intentionally use the direct socket peer.
 - [ ] Review cookie policy, SQLite backup/restore and signing-key rotation behavior.
 - [ ] Verify persistent volume and secret provisioning on the target cluster.
 - [ ] Independent security review; do not treat automated tests as a substitute.
