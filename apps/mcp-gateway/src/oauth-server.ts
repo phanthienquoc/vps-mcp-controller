@@ -165,8 +165,10 @@ function consumeAuthorizationTransaction(token: string): URLSearchParams | null 
 
 function isSameOriginFormPost(req: Request): boolean {
   if (req.header("sec-fetch-site") === "cross-site") return false;
+  // Browser form POSTs include Origin. Reject absent Origin rather than
+  // treating an unverifiable request as same-origin.
   const origin = req.header("origin");
-  if (!origin) return true;
+  if (!origin) return false;
   try {
     return new URL(origin).origin === new URL(ISSUER).origin;
   } catch {
@@ -398,6 +400,7 @@ export async function createLocalOAuthRouter() {
   });
 
   router.post("/oauth/logout", (req, res) => {
+    if (!isSameOriginFormPost(req)) return sendError(res, 403, "access_denied", "Cross-origin form submission rejected");
     const cookie = req.header("cookie") ?? "";
     const raw = cookie.split(";").map((x) => x.trim()).find((x) => x.startsWith("mcp_session="))?.slice(12);
     if (raw) db.prepare("DELETE FROM sessions WHERE token_hash=?").run(hash(decodeURIComponent(raw)));
