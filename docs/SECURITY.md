@@ -14,7 +14,7 @@
 - The SSH deploy user must not be able to write the checkout, .git metadata, deploy scripts or manifests.
 - The root-owned deploy entrypoint fetches the fixed origin/master, verifies the requested full commit SHA exists and is an ancestor of refs/remotes/origin/master, and extracts only deploy/k3s from that commit.
 - Kubernetes applies use the extracted manifests from the verified commit, not the SSH user's working tree or a mutable branch checkout.
-- The GitHub Actions workflow verifies HEAD == GITHUB_SHA, builds the image with that immutable SHA tag, and passes the same SHA to the root entrypoint. Non-master workflow dispatches are rejected.
+- The GitHub Actions workflow verifies HEAD == GITHUB_SHA, requires the explicit reviewed OAuth release gate before image publication, and validates a non-root SSH identity, strict host-key pin, port 22, the Ready `tce-k3s-01` node, and root-owned non-writable deployment sources before building. It builds the image with the immutable SHA tag and passes the same SHA to the root entrypoint. Non-master workflow dispatches are rejected.
 
 ## Credential handling
 
