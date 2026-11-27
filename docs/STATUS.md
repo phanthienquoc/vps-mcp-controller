@@ -7,7 +7,7 @@ Updated: 2026-11-27
 - [x] Repository bootstrap and dedicated feature branch.
 - [x] Architecture, security, development, deployment and operations docs.
 - [x] Shared typed operation contract.
-- [x] MCP Streamable HTTP gateway with temporary static bearer integration auth.
+- [x] MCP Streamable HTTP gateway bootstrap; legacy static bearer verifier remains in source but is not wired into the production manifest.
 - [x] Host root-agent with typed systemd/containerd/k3s adapters.
 - [x] k3s deployment/service/ingress templates and host systemd unit.
 - [x] CI and GHCR image-publish workflow.
