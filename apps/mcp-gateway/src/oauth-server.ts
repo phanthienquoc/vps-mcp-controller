@@ -1,5 +1,5 @@
 import { randomBytes, createHash, scryptSync, timingSafeEqual, createPublicKey } from "node:crypto";
-import { isAllowedRedirectUri, parseOAuthScopes, verifyPkceS256 } from "./oauth-helpers.js";
+import { isAllowedRedirectUri, parseOAuthScopes, pkceS256 } from "./oauth-helpers.js";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -343,13 +343,14 @@ export async function createLocalOAuthRouter() {
       const code = String(req.body?.code ?? "");
       const redirectUri = String(req.body?.redirect_uri ?? "");
       const verifier = String(req.body?.code_verifier ?? "");
-      const row = db.prepare("DELETE FROM auth_codes WHERE code_hash=? RETURNING client_id,user_id,redirect_uri,challenge,resource,scope,expires_at")
-        .get(hash(code)) as
+      if (!/^[A-Za-z0-9._~-]{43,128}$/.test(verifier)) return sendError(res, 400, "invalid_grant");
+      const now = Math.floor(Date.now() / 1000);
+      // Consume only when every binding, including PKCE, matches. A bad verifier
+      // must not burn a valid code, while concurrent exchanges remain atomic.
+      const row = db.prepare("DELETE FROM auth_codes WHERE code_hash=? AND client_id=? AND redirect_uri=? AND resource=? AND challenge=? AND expires_at>=? RETURNING client_id,user_id,redirect_uri,challenge,resource,scope,expires_at")
+        .get(hash(code), clientId, redirectUri, String(req.body?.resource ?? ""), pkceS256(verifier), now) as
         { client_id: string; user_id: string; redirect_uri: string; challenge: string; resource: string; scope: string; expires_at: number } | undefined;
-      if (!row || row.expires_at < Math.floor(Date.now() / 1000) || row.client_id !== clientId
-          || row.redirect_uri !== redirectUri || row.resource !== String(req.body?.resource ?? "")
-          || !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier)) return sendError(res, 400, "invalid_grant");
-      if (!verifyPkceS256(verifier, row.challenge)) return sendError(res, 400, "invalid_grant");
+      if (!row) return sendError(res, 400, "invalid_grant");
       const access = await new SignJWT({ scope: row.scope })
         .setProtectedHeader({ alg: "RS256", kid: publicJwk.kid as string, typ: "at+jwt" })
         .setIssuer(ISSUER).setSubject(row.user_id).setAudience(row.resource)
