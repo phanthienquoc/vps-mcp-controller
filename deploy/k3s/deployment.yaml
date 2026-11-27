@@ -39,11 +39,6 @@ spec:
               value: mcp.mrcute.space
             - name: ROOT_AGENT_SOCKET
               value: /run/vps-mcp/root-agent.sock
-            - name: MCP_BEARER_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: vps-mcp-secrets
-                  key: mcp-bearer-token
           readinessProbe:
             httpGet:
               path: /healthz

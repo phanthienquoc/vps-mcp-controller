@@ -7,7 +7,7 @@ Updated: 2026-11-27
 - [x] Repository bootstrap and dedicated feature branch.
 - [x] Architecture, security, development, deployment and operations docs.
 - [x] Shared typed operation contract.
-- [x] MCP Streamable HTTP gateway with temporary bearer integration auth.
+- [x] MCP Streamable HTTP gateway bootstrap; legacy static bearer verifier remains in source but is not wired into the production manifest.
 - [x] Host root-agent with typed systemd/containerd/k3s adapters.
 - [x] k3s deployment/service/ingress templates and host systemd unit.
 - [x] CI and GHCR image-publish workflow.
@@ -19,21 +19,26 @@ Updated: 2026-11-27
 - [x] Gateway image publication targets linux/amd64 and linux/arm64.
 - [x] Host Root Agent uses a checksum-verified Node 26 runtime isolated under the trusted checkout; no system-wide Node/npm is required.
 - [x] Preflight treats the expected unauthenticated GHCR HTTP 401 challenge as registry reachability.
-- [x] Deployment provisions the ingress TLS secret through cert-manager Certificate and waits for readiness.
+- [x] Deployment provisions ingress TLS through cert-manager.
 
-## Hardening review and production gates
+## Production-only decision
 
-- [ ] Required CI checks pass and implementation PR is squash-merged.
-- [ ] User runs the updated read-only VPS preflight after merge and reviews all output.
+- [x] Explicitly document that there is no staging environment or staging credential path.
+- [x] Remove instructions to generate or install a static gateway bearer secret.
+- [ ] Implement OAuth 2.1 Authorization Code + PKCE and MCP authorization metadata.
+- [ ] Implement durable protected storage for authorization codes, sessions/consent and client registrations.
+- [ ] Implement audience/scope validation, short-lived tokens, JWKS/key rotation and revocation.
+- [ ] Security review OAuth implementation and verify ChatGPT MCP interoperability.
+- [ ] Only then authorize Root Agent installation and production deployment.
+
+## Remaining work
+
 - [ ] Test Root Agent in an isolated Linux VM.
-- [ ] Verify DNS, IngressClass, TLS secret, GHCR permissions and available disk on the actual VPS.
-- [ ] Install host Root Agent only after preflight review and explicit authorization.
-- [ ] Deploy gateway only after separate explicit authorization and verify all tools.
-- [ ] Prove recovery/rollback behavior.
-- [ ] Implement standards-compliant OAuth 2.1 / PKCE and protected-resource metadata for ChatGPT custom MCP.
+- [ ] Verify DNS, IngressClass, TLS, GHCR permissions and available disk on the actual VPS.
 - [ ] Implement GitHub Actions adapter with repo allowlist and least-privilege token.
 - [ ] Implement Supabase read-only diagnostics adapter.
 - [ ] Add durable audit storage, retention and alerts.
+- [ ] Prove recovery/rollback behavior.
 
 ## Safety boundaries
 
@@ -43,4 +48,4 @@ Updated: 2026-11-27
 - Autonomous rollout restart is limited to ops-prod and tce-prod.
 - stock-prod and media-prod are read-only for this controller until separate policy review.
 
-No VPS command has been executed and no Kubernetes manifest has been applied by this implementation change. Production completion must not be claimed until the gates above have evidence.
+No VPS command has been executed and no Kubernetes manifest has been applied. The Gateway is not production-ready until OAuth requirements above have evidence.
