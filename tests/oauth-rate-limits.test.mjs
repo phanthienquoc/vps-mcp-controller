@@ -72,3 +72,10 @@ test("authorization and token endpoints have independent request limits", async 
   const tokenLimited = await post("/oauth/token", tokenBody, "203.0.113.3");
   assert.equal(tokenLimited.status, 429);
 });
+test("revocation endpoint has its own request limit", async () => {
+  assert.equal((await post("/oauth/revoke", { token: "unknown" }, "192.0.2.1")).status, 200);
+  assert.equal((await post("/oauth/revoke", { token: "unknown" }, "192.0.2.2")).status, 200);
+  const limited = await post("/oauth/revoke", { token: "unknown" }, "192.0.2.3");
+  assert.equal(limited.status, 429);
+  assert.ok(Number(limited.headers.get("retry-after")) > 0);
+});
