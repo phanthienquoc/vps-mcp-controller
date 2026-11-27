@@ -27,11 +27,13 @@ If the trusted checkout does not yet exist, stop and report that fact. Do not cl
 - Node.js 26 runtime isolated under the trusted checkout; no system-wide Node/npm requirement.
 - k3s reachable, at least 2 GiB free on relevant filesystems, DNS `mcp.mrcute.space` pointing to the VPS.
 - cert-manager ClusterIssuer `letsencrypt-prod` Ready; ingress TCP 80/443 reachable.
-- GitHub Environment `tce-k3s-01` with `VPS_HOST`, `VPS_USER`, `VPS_SSH_PORT=22`; secrets `VPS_SSH_PRIVATE_KEY`, `VPS_KNOWN_HOSTS`, and read-only `GHCR_READ_TOKEN`.
+- GitHub Environment `tce-k3s-01` with `VPS_HOST`, a dedicated non-root `VPS_USER`, and `VPS_SSH_PORT=22`; secrets `VPS_SSH_PRIVATE_KEY`, `VPS_KNOWN_HOSTS`, and read-only `GHCR_READ_TOKEN`.
+- Environment variable `MCP_OAUTH_PRODUCTION_READY=true`, set only after OAuth 2.1/PKCE, authorization metadata, token lifecycle, and independent security review are complete.
+- Before publishing any image, the workflow verifies the pinned SSH host key, non-root remote UID, port 22, Kubernetes node `tce-k3s-01` Ready, root ownership and non-writable permissions for the trusted checkout/manifests/entrypoint, and a clean ownership/mode scan of the checkout.
 - OAuth issuer/client registration, persistent authorization-code/session storage, signing key rotation, JWKS, short-lived scoped audience-bound tokens and revocation, all provisioned through a reviewed secret-management process.
 
 Never send private keys, passwords, client secrets or tokens through ChatGPT.
 
 ## Authorization gate
 
-Only after OAuth 2.1/PKCE and metadata endpoints are implemented and independently reviewed may the user authorize Root Agent installation and, separately, production deployment. A merged PR or successful CI is not deployment authorization.
+Only after OAuth 2.1/PKCE and metadata endpoints are implemented and independently reviewed may `MCP_OAUTH_PRODUCTION_READY` be set to `true`. The deploy workflow checks this gate before SSH setup or image publication. It then validates the exact target cluster and trusted deployment paths before publishing an image. Root Agent installation and production deployment remain separate authorized steps. A merged PR or successful CI is not deployment authorization.
