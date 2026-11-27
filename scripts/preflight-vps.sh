@@ -10,10 +10,12 @@ fail(){ printf 'FAIL  %s\n' "$1"; FAIL=$((FAIL+1)); }
 has(){ command -v "$1" >/dev/null 2>&1; }
 
 printf 'VPS MCP Controller preflight (read-only)\n'
-printf 'Host: %s | User: %s\n\n' "$(hostname)" "$(id -un)"
+printf 'Host: %s | User: %s | Architecture: %s\n\n' "$(hostname)" "$(id -un)" "$(uname -m)"
 
 REPO_DIR="/opt/vps-mcp-controller"
 CHECK_USER="${SUDO_USER:-$(id -un)}"
+RUNTIME_NODE="$REPO_DIR/runtime/node/bin/node"
+RUNTIME_NPM="$REPO_DIR/runtime/node/bin/npm"
 check_trusted_path() {
   local path="$1"
   if [[ ! -e "$path" || -L "$path" ]]; then
@@ -69,12 +71,24 @@ else
   warn "Root deploy entrypoint is not installed yet (expected before deployment)"
 fi
 
-if has node; then
-  NODE_MAJOR="$(node -p 'Number(process.versions.node.split(".")[0])')"
-  if [[ "$NODE_MAJOR" -eq 26 ]]; then ok "Node.js $(node --version)"; else fail "Node.js 26 required; found $(node --version)"; fi
-else fail "Node.js not installed"; fi
+# Node is deliberately isolated under the trusted checkout. A system-wide Node/npm
+# installation is neither required nor inspected.
+if [[ -x "$RUNTIME_NODE" && -x "$RUNTIME_NPM" ]]; then
+  NODE_MAJOR="$("$RUNTIME_NODE" -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || echo 0)"
+  if [[ "$NODE_MAJOR" -eq 26 ]]; then
+    ok "Isolated Node.js $("$RUNTIME_NODE" --version) and npm $("$RUNTIME_NPM" --version)"
+  else
+    fail "Isolated runtime must be Node.js 26; found $("$RUNTIME_NODE" --version 2>/dev/null || echo unavailable)"
+  fi
+else
+  warn "Isolated Node.js 26 runtime not installed yet; installer downloads a checksum-verified runtime (host Node/npm not required)"
+fi
 
-if has npm; then ok "npm $(npm --version)"; else fail "npm not installed"; fi
+case "$(uname -m)" in
+  aarch64|arm64) ok "Host architecture arm64; deployment workflow publishes linux/arm64 image" ;;
+  x86_64|amd64) ok "Host architecture amd64; deployment workflow publishes linux/amd64 image" ;;
+  *) fail "Unsupported host architecture for published MCP image: $(uname -m)" ;;
+esac
 
 if has k3s; then
   ok "k3s binary found: $(command -v k3s)"
@@ -108,7 +122,15 @@ if getent group vps-mcp >/dev/null 2>&1; then
   if [[ "$GROUP_GID" == "34001" ]]; then ok "Socket group vps-mcp has GID 34001"; else fail "vps-mcp group GID is $GROUP_GID, expected 34001"; fi
 else warn "Socket group vps-mcp not installed yet"; fi
 
-if curl -fsSI --max-time 8 https://ghcr.io/v2/ >/dev/null 2>&1; then ok "GHCR registry reachable"; else warn "Cannot reach GHCR registry"; fi
+# GHCR's unauthenticated v2 endpoint normally returns 401 with a Bearer challenge.
+# Treat that as reachable; only transport/5xx/unexpected responses are warnings.
+GHCR_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 https://ghcr.io/v2/ 2>/dev/null || true)"
+case "$GHCR_STATUS" in
+  200|401) ok "GHCR registry reachable (HTTP $GHCR_STATUS; authentication may be required)" ;;
+  403) warn "GHCR registry reachable but access is forbidden (HTTP 403)" ;;
+  000|"") warn "Cannot establish HTTPS connection to GHCR registry" ;;
+  *) warn "GHCR registry returned unexpected HTTP status $GHCR_STATUS" ;;
+esac
 
 printf '\nSummary: %s PASS, %s WARN, %s FAIL\n' "$PASS" "$WARN" "$FAIL"
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
