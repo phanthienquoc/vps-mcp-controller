@@ -1,37 +1,54 @@
 # Production deployment runbook
 
-This repository is **production-only**. There is no staging namespace, staging credential, static bearer-token setup, or staging deployment path.
+Production-only. No Keycloak, no external identity provider and no static bearer-token mode.
 
-## Current release gate
+## Self-hosted OAuth 2.1
 
-**Do not install the Root Agent or deploy the Gateway yet.** The Gateway currently has a static bearer-token verifier and does not implement OAuth 2.1/PKCE or MCP authorization metadata. That verifier is not acceptable for public ChatGPT production access. Production deployment remains blocked until a standards-compliant OAuth implementation is merged, tested, and reviewed.
+The MCP Gateway hosts both the protected resource and a minimal authorization server at \`https://mcp.mrcute.space\`.
 
-In particular, do not create `vps-mcp-secrets`, do not run any command that generates `mcp-bearer-token`, and do not dispatch the deploy workflow. Renaming a static token does not make it production-safe.
+- OAuth authorization server metadata: \`/.well-known/oauth-authorization-server\`
+- Protected resource metadata: \`/.well-known/oauth-protected-resource\`
+- Authorization endpoint: \`/oauth/authorize\`
+- Token endpoint: \`/oauth/token\`
+- DCR endpoint: \`/oauth/register\`
+- JWKS endpoint: \`/oauth/jwks.json\`
+- Revocation endpoint: \`/oauth/revoke\`
 
-## VPS read-only preflight
+Authorization Code + PKCE S256 is required. ChatGPT's DCR flow is supported; CIMD is deliberately not advertised in this first version. Public clients use token endpoint auth method \`none\`. The resource parameter must equal \`https://mcp.mrcute.space/mcp\` and is copied into JWT audience.
 
-After the repository change is merged, run only the following read-only preflight command on `tce-k3s-01`:
+## Required Kubernetes Secret
 
-~~~bash
+Create the Secret \`mcp-oauth-secrets\` in namespace \`ops-prod\` through the approved secret-provisioning path (never commit it):
+
+- \`MCP_BOOTSTRAP_EMAIL\`: initial admin login email.
+- \`MCP_BOOTSTRAP_PASSWORD\`: strong initial password, at least 14 characters.
+- \`MCP_OAUTH_SIGNING_PRIVATE_KEY\`: PEM-encoded RSA private key (PKCS#8, RSA 2048-bit minimum; 3072-bit recommended).
+- \`MCP_OAUTH_SIGNING_KID\`: stable key identifier, e.g. \`mcp-rsa-2026-01\`.
+
+The app hashes the bootstrap password with scrypt and stores the account in SQLite on persistent storage. The bootstrap user is created only if the email does not already exist; changing the environment password does not overwrite an existing account. Signing key rotation must retain the previous public key during the maximum token lifetime and is a separate reviewed operation.
+
+## Persistent data
+
+The deployment mounts a persistent volume claim \`mcp-auth-data\` at \`/var/lib/vps-mcp-auth\`. SQLite stores users, registered OAuth clients, sessions, authorization codes and refresh-token families. Do not run more than one gateway replica against this SQLite database. The deployment strategy is Recreate.
+
+## Important implementation limitations / security gates
+
+- Login uses a single bootstrap administrator account. User creation, password reset/change UI, multi-user administration and MFA are not implemented.
+- Login attempts are throttled by IP/email in SQLite. Place the service behind the existing trusted HTTPS ingress and preserve a trustworthy client IP policy; do not blindly trust user-supplied forwarded headers.
+- DCR accepts HTTPS redirect URIs only and stores exact URI matches. The initial ChatGPT integration must be verified against the actual callback URI.
+- CIMD and \`private_key_jwt\` are not advertised or supported; the authorization server advertises DCR and public-client \`none\`.
+- Access JWTs last five minutes. Revoking refresh tokens does not immediately invalidate already-issued access tokens; they expire within five minutes.
+- Refresh tokens rotate on every use; reuse of a consumed token revokes its family.
+- Signing private key and bootstrap password are runtime secrets only; never put them in Git, ConfigMaps, command history or chat.
+
+## Before deployment
+
+The PR must pass Node 26 typecheck/build/tests, an OAuth protocol/security review and an end-to-end ChatGPT MCP authorization test. Confirm persistent volume availability and provision the Kubernetes Secret out of band. Do not install the Root Agent or deploy until separately authorized.
+
+## Existing VPS preflight
+
+\`\`\`bash
 sudo bash /opt/vps-mcp-controller/scripts/preflight-vps.sh
-~~~
+\`\`\`
 
-It inspects host architecture, trusted checkout ownership, k3s access, disk, DNS, GHCR reachability and TLS prerequisites. It does not install software, change permissions, create secrets, restart services or apply manifests.
-
-If the trusted checkout does not yet exist, stop and report that fact. Do not clone or install anything until the bootstrap step has been separately reviewed and authorized.
-
-## Production prerequisites (once OAuth gate is cleared)
-
-- Trusted root-owned checkout at `/opt/vps-mcp-controller`; deploy SSH user cannot write it.
-- Dedicated non-root SSH deploy account; GitHub Actions is the only deployment path.
-- Node.js 26 runtime isolated under the trusted checkout; no system-wide Node/npm requirement.
-- k3s reachable, at least 2 GiB free on relevant filesystems, DNS `mcp.mrcute.space` pointing to the VPS.
-- cert-manager ClusterIssuer `letsencrypt-prod` Ready; ingress TCP 80/443 reachable.
-- GitHub Environment `tce-k3s-01` with `VPS_HOST`, `VPS_USER`, `VPS_SSH_PORT=22`; secrets `VPS_SSH_PRIVATE_KEY`, `VPS_KNOWN_HOSTS`, and read-only `GHCR_READ_TOKEN`.
-- OAuth issuer/client registration, persistent authorization-code/session storage, signing key rotation, JWKS, short-lived scoped audience-bound tokens and revocation, all provisioned through a reviewed secret-management process.
-
-Never send private keys, passwords, client secrets or tokens through ChatGPT.
-
-## Authorization gate
-
-Only after OAuth 2.1/PKCE and metadata endpoints are implemented and independently reviewed may the user authorize Root Agent installation and, separately, production deployment. A merged PR or successful CI is not deployment authorization.
+This command is read-only. No production workload changes are authorized by merging this PR.
