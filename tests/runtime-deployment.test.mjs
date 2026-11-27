@@ -49,3 +49,18 @@ test("deployment provisions TLS from the managed ClusterIssuer", async () => {
   assert.match(certificate, /name: letsencrypt-prod/);
   assert.match(certificate, /secretName: mcp-mrcute-space-tls/);
 });
+
+test("production deploy is blocked before any privileged mutation until OAuth is ready", async () => {
+  const deploy = await read("../scripts/deploy-vps.sh");
+  const guard = deploy.indexOf("Production deployment blocked: OAuth 2.1/PKCE");
+  const fetch = deploy.indexOf('git -C "$REPO_DIR" fetch');
+  assert.ok(guard > 0, "explicit production OAuth gate must exist");
+  assert.ok(fetch > guard, "OAuth gate must execute before fetching/applying deployment manifests");
+  assert.match(deploy, /exit 78/);
+});
+
+test("production deployment docs do not create a static bearer credential", async () => {
+  const docs = await read("../docs/DEPLOYMENT.md");
+  assert.match(docs, /production-only/i);
+  assert.doesNotMatch(docs, /mcp-bearer-token|openssl rand -hex/);
+});
