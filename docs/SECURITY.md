@@ -27,6 +27,7 @@
 
 - No staging environment or staging credentials are supported.
 - Static bearer tokens are not accepted as production ChatGPT MCP authentication.
+- The production Kubernetes manifest does not inject the legacy static bearer secret; direct manifest application therefore cannot enable the legacy bearer verifier.
 - Public production access is blocked until OAuth 2.1 Authorization Code + PKCE (S256), protected-resource and authorization-server metadata, exact redirect URI validation, one-time authorization codes, short-lived audience- and scope-bound access tokens, JWKS/signing-key rotation, and revocation are implemented and tested.
 - OAuth state, code, consent, client registration and refresh/session data must use durable protected storage; secrets must be provisioned outside chat and outside source control.
 - Never expose the gateway publicly with the bootstrap static bearer verifier.
