@@ -127,6 +127,24 @@ test("deploy workflow requires OAuth approval, port 22, non-root SSH and pinned 
   assert.match(workflow, /printf '%s' "\$GHCR_READ_TOKEN" \|/);
 });
 
+test("deploy workflow gates the exact master CI commit and explicit tce-k3s-01 target before SSH", async () => {
+  const workflow = await read("../.github/workflows/deploy-vps.yml");
+  const ciGate = workflow.indexOf("CI_RUNS=");
+  const ssh = workflow.indexOf("Configure strict SSH");
+  const preflight = workflow.indexOf("Run read-only VPS preflight before publishing");
+  const build = workflow.indexOf("Build and publish immutable multi-architecture gateway image");
+  assert.ok(ciGate > 0 && ciGate < ssh, "exact-commit CI gate must run before SSH");
+  assert.ok(preflight > ssh && preflight < build, "read-only target preflight must precede image publication");
+  assert.ok(workflow.includes("actions: read"));
+  assert.ok(workflow.includes("actions/workflows/ci.yml/runs"));
+  assert.ok(workflow.includes("head_sha"));
+  assert.ok(workflow.includes("conclusion"));
+  assert.ok(workflow.includes('test "$VPS_TARGET_ID" = "tce-k3s-01"'));
+  assert.ok(workflow.includes("Expected node ${VPS_TARGET_ID} is Ready"));
+  assert.ok(workflow.includes("GH_TOKEN: ${{ github.token }}"));
+  assert.ok(workflow.includes('fail_gate "VPS_SSH_PRIVATE_KEY is not available in the tce-k3s-01 Environment"'));
+  assert.ok(workflow.includes('fail_gate "GHCR_READ_TOKEN is not available in the tce-k3s-01 Environment"'));
+});
 test("deploy-entrypoint installer rejects root SSH users and installs only narrow sudo commands", async () => {
   const installer = await read("../scripts/install-deploy-entrypoint.sh");
   assert.match(installer, /DEPLOY_USER.*== "root"/);

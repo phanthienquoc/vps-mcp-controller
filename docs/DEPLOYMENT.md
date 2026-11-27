@@ -98,6 +98,7 @@ The only approved production path is the manual `.github/workflows/deploy-vps.ym
 
 Required Environment variables (values are configured in GitHub, never committed):
 - `MCP_OAUTH_PRODUCTION_READY=true`: set only after the OAuth protocol/security review and ChatGPT MCP authorization end-to-end test pass.
+- `VPS_TARGET_ID=tce-k3s-01`: fixed target identifier; any other value is rejected.
 - `VPS_HOST`: the SSH host covered by the pinned known-hosts entry.
 - `VPS_USER`: an existing non-root SSH deploy user.
 - `VPS_SSH_PORT=22`: other ports are rejected.
@@ -107,7 +108,7 @@ Required Environment secrets:
 - `VPS_KNOWN_HOSTS`
 - `GHCR_READ_TOKEN` with read-only package access.
 
-The workflow checks that all required variables/secrets are present before building or publishing, requires `StrictHostKeyChecking=yes` with a pinned `known_hosts` entry, and runs `sudo -n /usr/local/sbin/vps-mcp-preflight` without logging host details. The root-owned entrypoint then verifies the requested SHA is reachable from `origin/master`, checks that Kubernetes node `tce-k3s-01` is Ready, and applies only manifests archived from that trusted checkout. The Gateway is pinned to that node because the Root Agent socket is a hostPath.
+Before any SSH connection or image publication, the workflow requires a completed successful `CI` push run for the exact selected `GITHUB_SHA` on `master`; it does not accept a green run from another commit or branch. The workflow uses the narrowly scoped Actions read permission for that check. It also requires `VPS_TARGET_ID=tce-k3s-01`, SSH port 22, a non-root deploy account, and a pinned `known_hosts` entry with `StrictHostKeyChecking=yes`. The read-only `sudo -n /usr/local/sbin/vps-mcp-preflight` must explicitly confirm that the configured Kubernetes target node is Ready before image publication. The workflow logs only the preflight summary, not host inventory. The root-owned entrypoint then independently verifies that the requested SHA is reachable from `origin/master` and applies only manifests archived from that trusted checkout. The Gateway is pinned to `tce-k3s-01` because the Root Agent socket is a hostPath.
 
 Install the Root Agent and the root-owned deploy/preflight wrappers only through their reviewed installers and only after the user-run preflight has been inspected. Do not use ad-hoc SSH shell commands or direct `kubectl apply` for production deployment.
 
