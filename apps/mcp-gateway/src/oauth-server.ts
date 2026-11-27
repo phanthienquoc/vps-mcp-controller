@@ -11,6 +11,7 @@ const RESOURCE = process.env.MCP_RESOURCE_URL ?? "https://mcp.mrcute.space/mcp";
 const DB_PATH = process.env.MCP_AUTH_DB_PATH ?? "/var/lib/vps-mcp-auth/auth.sqlite";
 const ACCESS_TTL = 300;
 const CODE_TTL = 120;
+const AUTHORIZATION_TTL = 10 * 60;
 const SESSION_TTL = 8 * 60 * 60;
 const REFRESH_TTL = 30 * 24 * 60 * 60;
 const SCOPE = "mcp:tools";
@@ -46,6 +47,9 @@ db.exec(`
     user_id TEXT NOT NULL, resource TEXT NOT NULL, scope TEXT NOT NULL,
     expires_at INTEGER NOT NULL, used_at INTEGER
   );
+  CREATE TABLE IF NOT EXISTS authorization_transactions (
+    transaction_hash TEXT PRIMARY KEY, request_query TEXT NOT NULL, expires_at INTEGER NOT NULL
+  );
 `);
 
 function hash(value: string): string {
@@ -64,6 +68,7 @@ function cleanExpired(): void {
   db.prepare("DELETE FROM sessions WHERE expires_at < ?").run(now);
   db.prepare("DELETE FROM auth_codes WHERE expires_at < ?").run(now);
   db.prepare("DELETE FROM refresh_tokens WHERE expires_at < ?").run(now);
+  db.prepare("DELETE FROM authorization_transactions WHERE expires_at <= ?").run(now);
 }
 
 function ensureBootstrapUser(): void {
@@ -134,6 +139,72 @@ function sessionUser(req: Request): string | null {
   return row.user_id;
 }
 
+function createAuthorizationTransaction(p: URLSearchParams): string {
+  const token = randomToken(32);
+  const expiresAt = Math.floor(Date.now() / 1000) + AUTHORIZATION_TTL;
+  db.prepare("INSERT INTO authorization_transactions(transaction_hash,request_query,expires_at) VALUES(?,?,?)")
+    .run(hash(token), p.toString(), expiresAt);
+  return token;
+}
+
+function readAuthorizationTransaction(token: string): URLSearchParams | null {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
+  const row = db.prepare("SELECT request_query,expires_at FROM authorization_transactions WHERE transaction_hash=?")
+    .get(hash(token)) as { request_query: string; expires_at: number } | undefined;
+  if (!row || row.expires_at <= Math.floor(Date.now() / 1000)) return null;
+  return new URLSearchParams(row.request_query);
+}
+
+function consumeAuthorizationTransaction(token: string): URLSearchParams | null {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
+  const now = Math.floor(Date.now() / 1000);
+  const row = db.prepare("DELETE FROM authorization_transactions WHERE transaction_hash=? AND expires_at>? RETURNING request_query")
+    .get(hash(token), now) as { request_query: string } | undefined;
+  return row ? new URLSearchParams(row.request_query) : null;
+}
+
+function isSameOriginFormPost(req: Request): boolean {
+  if (req.header("sec-fetch-site") === "cross-site") return false;
+  const origin = req.header("origin");
+  if (!origin) return true;
+  try {
+    return new URL(origin).origin === new URL(ISSUER).origin;
+  } catch {
+    return false;
+  }
+}
+
+function loginPage(transaction: string, message = ""): string {
+  const notice = message ? "<p>" + htmlEscape(message) + "</p>" : "";
+  return page("Sign in", notice +
+    '<form method="post" action="/oauth/login">' +
+    '<input type="hidden" name="transaction" value="' + htmlEscape(transaction) + '">' +
+    '<label>Email</label><input name="email" type="email" autocomplete="username" required>' +
+    '<label>Password</label><input name="password" type="password" autocomplete="current-password" required>' +
+    '<button>Sign in</button><small>Authorized access to the VPS MCP service</small></form>');
+}
+
+async function validateAuthorizationRequest(p: URLSearchParams) {
+  const clientId = p.get("client_id") ?? "";
+  const redirectUri = p.get("redirect_uri") ?? "";
+  const client = await resolveClient(clientId).catch(() => null);
+  if (!client || !client.redirect_uris.includes(redirectUri)) {
+    return { ok: false as const, status: 400, error: "invalid_request", description: "Unknown client or redirect URI" };
+  }
+  if (p.get("response_type") !== "code" || p.get("code_challenge_method") !== "S256"
+      || !/^[A-Za-z0-9_-]{43}$/.test(p.get("code_challenge") ?? "")) {
+    return { ok: false as const, status: 400, error: "invalid_request", description: "Authorization Code with PKCE S256 is required" };
+  }
+  if (p.get("resource") !== RESOURCE) {
+    return { ok: false as const, status: 400, error: "invalid_target" };
+  }
+  const scopes = parseOAuthScopes(p.get("scope") ?? "");
+  if (scopes.length !== 1 || scopes[0] !== SCOPE) {
+    return { ok: false as const, status: 400, error: "invalid_scope" };
+  }
+  return { ok: true as const, clientId, redirectUri, client };
+}
+
 export async function createLocalOAuthRouter() {
   cleanExpired();
   ensureBootstrapUser();
@@ -182,31 +253,29 @@ export async function createLocalOAuthRouter() {
 
   router.get("/oauth/authorize", async (req, res) => {
     const p = requestParams(req);
-    const clientId = p.get("client_id") ?? "";
-    const redirectUri = p.get("redirect_uri") ?? "";
-    const client = await resolveClient(clientId).catch(() => null);
-    if (!client || !client.redirect_uris.includes(redirectUri)) return sendError(res, 400, "invalid_request", "Unknown client or redirect URI");
-    if (p.get("response_type") !== "code" || p.get("code_challenge_method") !== "S256"
-        || !p.get("code_challenge") || !/^[A-Za-z0-9_-]{43,128}$/.test(p.get("code_challenge")!)) {
-      return sendError(res, 400, "invalid_request", "Authorization Code with PKCE S256 is required");
-    }
-    if (p.get("resource") !== RESOURCE) return sendError(res, 400, "invalid_target");
-    const scopes = parseOAuthScopes(p.get("scope") ?? "");
-    if (!scopes.includes(SCOPE) || scopes.some((s) => s !== SCOPE)) return sendError(res, 400, "invalid_scope");
-    const state = randomToken(24);
-    const serialized = Buffer.from(p.toString()).toString("base64url");
+    const validation = await validateAuthorizationRequest(p);
+    if (!validation.ok) return sendError(res, validation.status, validation.error, validation.description);
+    const transaction = createAuthorizationTransaction(p);
     const userId = sessionUser(req);
     if (!userId) {
-      res.type("html").send(page("Sign in", `<form method="post" action="/oauth/login"><input type="hidden" name="request" value="${serialized}"><label>Email</label><input name="email" type="email" autocomplete="username" required><label>Password</label><input name="password" type="password" autocomplete="current-password" required><button>Sign in</button><small>Authorized access to the VPS MCP service</small></form>`));
+      res.type("html").send(loginPage(transaction));
       return;
     }
-    res.type("html").send(page("Authorize access", `<p>Allow this client to access VPS monitoring and approved operations?</p><p><small>Permission: ${SCOPE}</small></p><form method="post" action="/oauth/consent"><input type="hidden" name="request" value="${serialized}"><button>Allow access</button></form>`));
+    res.type("html").send(page("Authorize access",
+      "<p>Allow this client to access VPS monitoring and approved operations?</p>" +
+      "<p><small>Permission: " + SCOPE + "</small></p>" +
+      '<form method="post" action="/oauth/consent"><input type="hidden" name="transaction" value="' +
+      htmlEscape(transaction) + '"><button>Allow access</button></form>'));
   });
 
   router.post("/oauth/login", async (req, res) => {
-    const request = String(req.body?.request ?? "");
-    let p: URLSearchParams;
-    try { p = new URLSearchParams(Buffer.from(request, "base64url").toString("utf8")); } catch { return sendError(res, 400, "invalid_request"); }
+    if (!isSameOriginFormPost(req)) return sendError(res, 403, "access_denied", "Cross-origin form submission rejected");
+    const transaction = String(req.body?.transaction ?? "");
+    const p = readAuthorizationTransaction(transaction);
+    if (!p) return sendError(res, 400, "invalid_request", "Authorization transaction is missing or expired");
+    const validation = await validateAuthorizationRequest(p);
+    if (!validation.ok) return sendError(res, validation.status, validation.error, validation.description);
+
     const email = String(req.body?.email ?? "").trim().toLowerCase();
     const password = String(req.body?.password ?? "");
     const attemptKey = hash(`${req.ip ?? "unknown"}|${email}`);
@@ -214,7 +283,7 @@ export async function createLocalOAuthRouter() {
     const attempt = db.prepare("SELECT failures,window_started,locked_until FROM login_attempts WHERE attempt_key=?").get(attemptKey) as
       { failures: number; window_started: number; locked_until: number | null } | undefined;
     if (attempt?.locked_until && attempt.locked_until > now) {
-      res.status(429).type("html").send(page("Please wait", "<p>Too many sign-in attempts. Try again later.</p>"));
+      res.status(429).type("html").send(loginPage(transaction, "Too many sign-in attempts. Try again later."));
       return;
     }
     const user = db.prepare("SELECT id,salt,password_hash FROM users WHERE email=? AND active=1").get(email) as
@@ -226,34 +295,41 @@ export async function createLocalOAuthRouter() {
       const lockedUntil = failures >= 8 ? now + 900 : null;
       db.prepare("INSERT INTO login_attempts(attempt_key,failures,window_started,locked_until) VALUES(?,?,?,?) ON CONFLICT(attempt_key) DO UPDATE SET failures=excluded.failures,window_started=excluded.window_started,locked_until=excluded.locked_until")
         .run(attemptKey, failures, windowStart, lockedUntil);
-      res.status(401).type("html").send(page("Sign in failed", `<p>Invalid email or password.</p><a href="/oauth/authorize?${htmlEscape(p.toString())}">Try again</a>`));
+      res.status(401).type("html").send(loginPage(transaction, "Invalid email or password."));
       return;
     }
+    const consumed = consumeAuthorizationTransaction(transaction);
+    if (!consumed) return sendError(res, 400, "invalid_request", "Authorization transaction was already used or expired");
     db.prepare("DELETE FROM login_attempts WHERE attempt_key=?").run(attemptKey);
     const session = randomToken();
     db.prepare("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)")
       .run(hash(session), user.id, Math.floor(Date.now() / 1000) + SESSION_TTL);
     res.setHeader("Set-Cookie", `mcp_session=${encodeURIComponent(session)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL}`);
-    res.redirect(303, `/oauth/authorize?${p.toString()}`);
+    res.redirect(303, `/oauth/authorize?${consumed.toString()}`);
   });
 
   router.post("/oauth/consent", async (req, res) => {
-    const encoded = String(req.body?.request ?? "");
-    let p: URLSearchParams;
-    try { p = new URLSearchParams(Buffer.from(encoded, "base64url").toString("utf8")); } catch { return sendError(res, 400, "invalid_request"); }
+    if (!isSameOriginFormPost(req)) return sendError(res, 403, "access_denied", "Cross-origin form submission rejected");
+    const transaction = String(req.body?.transaction ?? "");
+    const p = readAuthorizationTransaction(transaction);
+    if (!p) return sendError(res, 400, "invalid_request", "Authorization transaction is missing or expired");
     const userId = sessionUser(req);
-    if (!userId) return sendError(res, 401, "login_required");
-    const clientId = p.get("client_id") ?? "";
-    const client = await resolveClient(clientId).catch(() => null);
-    const redirectUri = p.get("redirect_uri") ?? "";
-    if (!client || !client.redirect_uris.includes(redirectUri)) return sendError(res, 400, "invalid_client");
-    if (p.get("resource") !== RESOURCE || p.get("code_challenge_method") !== "S256") return sendError(res, 400, "invalid_request");
+    if (!userId) {
+      res.status(401).type("html").send(loginPage(transaction, "Your session expired. Sign in again."));
+      return;
+    }
+    const validation = await validateAuthorizationRequest(p);
+    if (!validation.ok) return sendError(res, validation.status, validation.error, validation.description);
+    const consumed = consumeAuthorizationTransaction(transaction);
+    if (!consumed) return sendError(res, 400, "invalid_request", "Authorization transaction was already used or expired");
+
     const code = randomToken();
     db.prepare("INSERT INTO auth_codes(code_hash,client_id,user_id,redirect_uri,challenge,resource,scope,expires_at) VALUES(?,?,?,?,?,?,?,?)")
-      .run(hash(code), clientId, userId, redirectUri, p.get("code_challenge"), RESOURCE, SCOPE, Math.floor(Date.now() / 1000) + CODE_TTL);
-    const target = new URL(redirectUri);
+      .run(hash(code), validation.clientId, userId, validation.redirectUri, consumed.get("code_challenge"), RESOURCE, SCOPE, Math.floor(Date.now() / 1000) + CODE_TTL);
+    const target = new URL(validation.redirectUri);
     target.searchParams.set("code", code);
-    target.searchParams.set("state", p.get("state") ?? "");
+    if (consumed.has("state")) target.searchParams.set("state", consumed.get("state") ?? "");
+    else target.searchParams.delete("state");
     target.searchParams.set("iss", ISSUER);
     res.redirect(303, target.toString());
   });
