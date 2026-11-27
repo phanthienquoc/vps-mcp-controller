@@ -38,6 +38,17 @@ check_trusted_path() {
   ok "Root-owned and not writable by $CHECK_USER: $path"
 }
 
+if [[ -d /opt ]]; then
+  check_trusted_path "/opt"
+  if find /opt -maxdepth 0 -perm /022 -print -quit | grep -q .; then
+    fail "/opt is group/world-writable"
+  else
+    ok "/opt is not group/world-writable"
+  fi
+else
+  fail "/opt directory is missing"
+fi
+
 if [[ -d "$REPO_DIR/.git" ]]; then
   if find "$REPO_DIR" -xdev \( -type d -o -type f \) \( ! -user root -o -perm /022 \) -print -quit | grep -q .; then
     fail "Checkout contains non-root-owned or group/world-writable files"
