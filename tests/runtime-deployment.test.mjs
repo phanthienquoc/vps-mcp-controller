@@ -69,3 +69,34 @@ test("production gateway manifest does not mount a static bearer token", async (
   const manifest = await read("../deploy/k3s/deployment.yaml");
   assert.doesNotMatch(manifest, /MCP_BEARER_TOKEN|mcp-bearer-token|vps-mcp-secrets/);
 });
+
+
+test("production deploy workflow requires reviewed OAuth approval before publishing an image", async () => {
+  const workflow = await read("../.github/workflows/deploy-vps.yml");
+  const approval = workflow.indexOf("Require reviewed OAuth production approval");
+  const publish = workflow.indexOf("Build and publish immutable multi-architecture gateway image");
+  assert.ok(approval >= 0 && publish > approval, "OAuth approval must precede image publication");
+  assert.match(workflow, /MCP_OAUTH_PRODUCTION_READY/);
+  assert.match(workflow, /exit 78/);
+});
+
+test("deploy workflow verifies non-root SSH, port 22, strict host key and trusted target before publishing", async () => {
+  const workflow = await read("../.github/workflows/deploy-vps.yml");
+  const verify = workflow.indexOf("Verify remote target and trusted deploy sources");
+  const publish = workflow.indexOf("Build and publish immutable multi-architecture gateway image");
+  assert.ok(verify >= 0 && publish > verify, "remote preflight must precede image publication");
+  assert.match(workflow, /VPS_USER" != "root"/);
+  assert.match(workflow, /VPS_SSH_PORT" = "22"/);
+  assert.match(workflow, /StrictHostKeyChecking=yes/);
+  assert.match(workflow, /get node tce-k3s-01/);
+  assert.match(workflow, /stat -c '%U:%G:%a'/);
+  assert.match(workflow, /vps-mcp-deploy/);
+});
+
+test("root deploy entrypoint requires the exact tce-k3s-01 node to be Ready before applying manifests", async () => {
+  const deploy = await read("../scripts/deploy-vps.sh");
+  const targetCheck = deploy.indexOf("get node tce-k3s-01");
+  const firstApply = deploy.indexOf('apply -f "$MANIFEST_DIR/namespace.yaml"');
+  assert.ok(targetCheck >= 0 && firstApply > targetCheck);
+  assert.match(deploy, /Expected Kubernetes node tce-k3s-01 is not Ready/);
+});
