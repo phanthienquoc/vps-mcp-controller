@@ -18,6 +18,7 @@ process.env.MCP_OAUTH_DCR_LIMIT = "2";
 process.env.MCP_OAUTH_AUTHORIZE_LIMIT = "2";
 process.env.MCP_OAUTH_TOKEN_LIMIT = "2";
 process.env.MCP_OAUTH_REVOKE_LIMIT = "2";
+process.env.MCP_OAUTH_CONSENT_LIMIT = "2";
 
 const { createLocalOAuthRouter } = await import("../apps/mcp-gateway/dist/oauth-server.js");
 const app = express();
@@ -32,6 +33,7 @@ await new Promise((resolve, reject) => {
 const address = server.address();
 assert.ok(address && typeof address === "object");
 const baseUrl = "http://127.0.0.1:" + address.port;
+let registeredClientId;
 
 after(async () => {
   await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -51,12 +53,24 @@ async function post(path, body, spoofedIp) {
 
 test("DCR rate limit is persistent and cannot be bypassed with spoofed X-Forwarded-For", async () => {
   const body = { redirect_uris: ["https://client.example/callback"], token_endpoint_auth_method: "none" };
-  assert.equal((await post("/oauth/register", body, "198.51.100.1")).status, 201);
+  const first = await post("/oauth/register", body, "198.51.100.1");
+  assert.equal(first.status, 201);
+  registeredClientId = (await first.json()).client_id;
+  assert.ok(typeof registeredClientId === "string" && registeredClientId.length > 0);
   assert.equal((await post("/oauth/register", body, "198.51.100.2")).status, 201);
   const limited = await post("/oauth/register", body, "198.51.100.3");
   assert.equal(limited.status, 429);
   assert.ok(Number(limited.headers.get("retry-after")) > 0);
   assert.equal((await limited.json()).error, "rate_limited");
+
+  // Keep registration and revocation in the same test: the revocation
+  // fixture must be created before it is used, independent of test scheduling.
+  const revokeBody = { client_id: registeredClientId, token: "unknown" };
+  assert.equal((await post("/oauth/revoke", revokeBody, "192.0.2.1")).status, 200);
+  assert.equal((await post("/oauth/revoke", revokeBody, "192.0.2.2")).status, 200);
+  const revokeLimited = await post("/oauth/revoke", revokeBody, "192.0.2.3");
+  assert.equal(revokeLimited.status, 429);
+  assert.ok(Number(revokeLimited.headers.get("retry-after")) > 0);
 });
 
 test("authorization and token endpoints have independent request limits", async () => {
@@ -72,10 +86,15 @@ test("authorization and token endpoints have independent request limits", async 
   const tokenLimited = await post("/oauth/token", tokenBody, "203.0.113.3");
   assert.equal(tokenLimited.status, 429);
 });
-test("revocation endpoint has its own request limit", async () => {
-  assert.equal((await post("/oauth/revoke", { token: "unknown" }, "192.0.2.1")).status, 200);
-  assert.equal((await post("/oauth/revoke", { token: "unknown" }, "192.0.2.2")).status, 200);
-  const limited = await post("/oauth/revoke", { token: "unknown" }, "192.0.2.3");
+
+
+test("consent endpoint has an independent persistent request limit", async () => {
+  const body = { transaction: "x".repeat(43) };
+  const first = await post("/oauth/consent", body, "198.51.100.11");
+  assert.equal(first.status, 403);
+  const second = await post("/oauth/consent", body, "198.51.100.12");
+  assert.equal(second.status, 403);
+  const limited = await post("/oauth/consent", body, "198.51.100.13");
   assert.equal(limited.status, 429);
   assert.ok(Number(limited.headers.get("retry-after")) > 0);
 });

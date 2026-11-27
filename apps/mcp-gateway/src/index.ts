@@ -5,13 +5,12 @@ import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import { callRootAgent } from "./root-client.js";
-import { createOAuthMiddleware, loadOAuthConfig, protectedResourceMetadata } from "./auth.js";
+import { createOAuthMiddleware, loadOAuthConfig, protectedResourceMetadata, protectedResourceMetadataUri } from "./auth.js";
 import { createLocalOAuthRouter } from "./oauth-server.js";
 import type { Operation } from "@vps-mcp/contracts";
 
 const port = Number(process.env.PORT ?? "3000");
 const publicHost = process.env.MCP_ALLOWED_HOST ?? "mcp.mrcute.space";
-const resourcePath = "/.well-known/oauth-protected-resource";
 
 function createRestartOperation(
   namespace: "ops-prod" | "tce-prod",
@@ -82,7 +81,10 @@ app.use(express.json({ limit: "32kb" }));
 app.use(express.urlencoded({ extended: false, limit: "16kb" }));
 app.use(await createLocalOAuthRouter());
 app.get("/healthz", (_req, res) => res.status(200).json({ status: "ok", service: "vps-mcp-gateway" }));
-app.get(resourcePath, (_req, res) => res.status(200).json(protectedResourceMetadata(oauth)));
+const resourceMetadataPath = protectedResourceMetadataUri(oauth);
+app.get([resourceMetadataPath, "/.well-known/oauth-protected-resource"], (_req, res) =>
+  res.status(200).json(protectedResourceMetadata(oauth))
+);
 const nodeHandler = toNodeHandler(handler);
 app.all("/mcp", requireOAuth, (req, res) => {
   void nodeHandler(req, res, req.body);

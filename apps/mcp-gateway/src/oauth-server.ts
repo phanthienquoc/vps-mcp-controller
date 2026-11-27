@@ -29,6 +29,7 @@ db.exec(`
   );
   CREATE TABLE IF NOT EXISTS clients (
     client_id TEXT PRIMARY KEY, redirect_uris TEXT NOT NULL,
+    grant_types TEXT NOT NULL DEFAULT '["authorization_code"]',
     token_auth_method TEXT NOT NULL DEFAULT 'none', created_at INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS sessions (
@@ -56,6 +57,12 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS oauth_rate_limits_window_idx ON oauth_rate_limits(window_started);
 `);
+const clientColumns = db.prepare("PRAGMA table_info(clients)").all() as { name: string }[];
+if (!clientColumns.some((column) => column.name === "grant_types")) {
+  db.exec("ALTER TABLE clients ADD COLUMN grant_types TEXT NOT NULL DEFAULT '[\"authorization_code\"]'");
+  // Existing clients were created before grant types were persisted and could use refresh tokens.
+  db.exec("UPDATE clients SET grant_types = '[\"authorization_code\",\"refresh_token\"]'");
+}
 
 function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -177,27 +184,22 @@ function page(title: string, body: string): string {
 function sendError(res: Response, status: number, error: string, description?: string): void {
   res.status(status).json({ error, ...(description ? { error_description: description } : {}) });
 }
-function readClient(clientId: string): { redirect_uris: string[]; token_auth_method: string } | null {
-  const row = db.prepare("SELECT redirect_uris,token_auth_method FROM clients WHERE client_id=?").get(clientId) as
-    { redirect_uris: string; token_auth_method: string } | undefined;
-  if (row) return { redirect_uris: JSON.parse(row.redirect_uris), token_auth_method: row.token_auth_method };
+function readClient(clientId: string): { redirect_uris: string[]; grant_types: string[]; token_auth_method: string } | null {
+  const row = db.prepare("SELECT redirect_uris,grant_types,token_auth_method FROM clients WHERE client_id=?").get(clientId) as
+    { redirect_uris: string; grant_types: string; token_auth_method: string } | undefined;
+  if (row) return {
+    redirect_uris: JSON.parse(row.redirect_uris),
+    grant_types: JSON.parse(row.grant_types),
+    token_auth_method: row.token_auth_method
+  };
   return null;
 }
 
-async function resolveClient(clientId: string): Promise<{ redirect_uris: string[]; token_auth_method: string } | null> {
-  const registered = readClient(clientId);
-  if (registered) return registered;
-  let u: URL;
-  try { u = new URL(clientId); } catch { return null; }
-  // Restrict CIMD fetches to OpenAI's documented client metadata origin to prevent SSRF.
-  if (u.protocol !== "https:" || u.hostname !== "chatgpt.com" || u.username || u.password || u.port || u.hash) return null;
-  const response = await fetch(u, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(5000), redirect: "error" });
-  if (!response.ok) return null;
-  const doc = await response.json() as { client_id?: string; redirect_uris?: unknown; token_endpoint_auth_methods_supported?: unknown };
-  if (doc.client_id !== clientId || !Array.isArray(doc.redirect_uris) || !doc.redirect_uris.every((v) => typeof v === "string" && isAllowedRedirectUri(v))) return null;
-  const methods = doc.token_endpoint_auth_methods_supported;
-  if (!Array.isArray(methods) || !methods.includes("none")) return null;
-  return { redirect_uris: doc.redirect_uris as string[], token_auth_method: "none" };
+async function resolveClient(clientId: string): Promise<{ redirect_uris: string[]; grant_types: string[]; token_auth_method: string } | null> {
+  // This server advertises client_id_metadata_document_supported=false.
+  // Resolve only clients created through this server's DCR endpoint; do not
+  // perform network fetches for unregistered client identifiers.
+  return readClient(clientId);
 }
 function requestParams(req: Request): URLSearchParams {
   const out = new URLSearchParams();
@@ -307,22 +309,28 @@ export async function createLocalOAuthRouter() {
 
   router.post("/oauth/register", rateLimit("dcr", configuredLimit("MCP_OAUTH_DCR_LIMIT", 20), 3600), async (req, res) => {
     const redirects = req.body?.redirect_uris;
-    const grants = req.body?.grant_types ?? ["authorization_code", "refresh_token"];
-    const methods = req.body?.token_endpoint_auth_method ? [req.body.token_endpoint_auth_method] : ["none"];
+    const grants = req.body?.grant_types ?? ["authorization_code"];
+    const responseTypes = req.body?.response_types ?? ["code"];
+    const authMethod = req.body?.token_endpoint_auth_method ?? "none";
+    const supportedGrants = new Set(["authorization_code", "refresh_token"]);
     if (!Array.isArray(redirects) || redirects.length < 1 || redirects.length > 10
         || !redirects.every((v: unknown) => typeof v === "string" && isAllowedRedirectUri(v))
-        || !Array.isArray(grants) || !grants.includes("authorization_code")
-        || !Array.isArray(methods) || !methods.includes("none")) {
+        || new Set(redirects).size !== redirects.length
+        || !Array.isArray(grants) || grants.length < 1 || grants.length > supportedGrants.size
+        || !grants.every((v: unknown) => typeof v === "string" && supportedGrants.has(v))
+        || new Set(grants).size !== grants.length || !grants.includes("authorization_code")
+        || !Array.isArray(responseTypes) || responseTypes.length !== 1 || responseTypes[0] !== "code"
+        || authMethod !== "none") {
       return sendError(res, 400, "invalid_client_metadata");
     }
     const clientId = randomToken(24);
-    db.prepare("INSERT INTO clients(client_id,redirect_uris,token_auth_method,created_at) VALUES(?,?,?,?)")
-      .run(clientId, JSON.stringify(redirects), "none", Math.floor(Date.now() / 1000));
+    db.prepare("INSERT INTO clients(client_id,redirect_uris,grant_types,token_auth_method,created_at) VALUES(?,?,?,?,?)")
+      .run(clientId, JSON.stringify(redirects), JSON.stringify(grants), "none", Math.floor(Date.now() / 1000));
     res.status(201).json({
       client_id: clientId,
       client_id_issued_at: Math.floor(Date.now() / 1000),
       redirect_uris: redirects,
-      grant_types: ["authorization_code", "refresh_token"],
+      grant_types: grants,
       response_types: ["code"],
       token_endpoint_auth_method: "none",
     });
@@ -345,7 +353,7 @@ export async function createLocalOAuthRouter() {
       htmlEscape(transaction) + '"><button>Allow access</button></form>'));
   });
 
-  router.post("/oauth/login", async (req, res) => {
+  router.post("/oauth/login", rateLimit("login", configuredLimit("MCP_OAUTH_LOGIN_LIMIT", 30), 60), async (req, res) => {
     if (!isSameOriginFormPost(req)) return sendError(res, 403, "access_denied", "Cross-origin form submission rejected");
     const transaction = String(req.body?.transaction ?? "");
     const p = readAuthorizationTransaction(transaction);
@@ -385,7 +393,7 @@ export async function createLocalOAuthRouter() {
     res.redirect(303, `/oauth/authorize?${consumed.toString()}`);
   });
 
-  router.post("/oauth/consent", async (req, res) => {
+  router.post("/oauth/consent", rateLimit("consent", configuredLimit("MCP_OAUTH_CONSENT_LIMIT", 60), 60), async (req, res) => {
     if (!isSameOriginFormPost(req)) return sendError(res, 403, "access_denied", "Cross-origin form submission rejected");
     const transaction = String(req.body?.transaction ?? "");
     const p = readAuthorizationTransaction(transaction);
@@ -412,10 +420,13 @@ export async function createLocalOAuthRouter() {
   });
 
   router.post("/oauth/token", rateLimit("token", configuredLimit("MCP_OAUTH_TOKEN_LIMIT", 60), 60), async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Pragma", "no-cache");
     const grant = String(req.body?.grant_type ?? "");
     const clientId = String(req.body?.client_id ?? "");
     const client = await resolveClient(clientId).catch(() => null);
     if (!client) return sendError(res, 401, "invalid_client");
+    if (!client.grant_types.includes(grant)) return sendError(res, 400, "unauthorized_client");
     if (grant === "authorization_code") {
       const code = String(req.body?.code ?? "");
       const redirectUri = String(req.body?.redirect_uri ?? "");
@@ -432,31 +443,46 @@ export async function createLocalOAuthRouter() {
         .setProtectedHeader({ alg: "RS256", kid: publicJwk.kid as string, typ: "at+jwt" })
         .setIssuer(ISSUER).setSubject(row.user_id).setAudience(row.resource)
         .setIssuedAt().setExpirationTime(`${ACCESS_TTL}s`).setJti(randomToken(16)).sign(signingKey);
-      const refresh = randomToken();
-      db.prepare("INSERT INTO refresh_tokens(token_hash,family_id,client_id,user_id,resource,scope,expires_at) VALUES(?,?,?,?,?,?,?)")
-        .run(hash(refresh), randomToken(16), clientId, row.user_id, row.resource, row.scope, Math.floor(Date.now() / 1000) + REFRESH_TTL);
+      const refresh = client.grant_types.includes("refresh_token") ? randomToken() : undefined;
+      if (refresh) {
+        db.prepare("INSERT INTO refresh_tokens(token_hash,family_id,client_id,user_id,resource,scope,expires_at) VALUES(?,?,?,?,?,?,?)")
+          .run(hash(refresh), randomToken(16), clientId, row.user_id, row.resource, row.scope, Math.floor(Date.now() / 1000) + REFRESH_TTL);
+      }
       res.setHeader("Cache-Control", "no-store");
-      res.json({ access_token: access, token_type: "Bearer", expires_in: ACCESS_TTL, refresh_token: refresh, scope: row.scope });
+      res.json({ access_token: access, token_type: "Bearer", expires_in: ACCESS_TTL, ...(refresh ? { refresh_token: refresh } : {}), scope: row.scope });
       return;
     }
     if (grant === "refresh_token") {
       const token = String(req.body?.refresh_token ?? "");
       const tokenHash = hash(token);
       const now = Math.floor(Date.now() / 1000);
-      const row = db.prepare("UPDATE refresh_tokens SET used_at=? WHERE token_hash=? AND client_id=? AND expires_at>=? AND used_at IS NULL RETURNING family_id,client_id,user_id,resource,scope,expires_at")
-        .get(now, tokenHash, clientId, now) as
-        { family_id: string; client_id: string; user_id: string; resource: string; scope: string; expires_at: number } | undefined;
-      if (!row) {
-        const reused = db.prepare("SELECT family_id,client_id FROM refresh_tokens WHERE token_hash=?").get(tokenHash) as
-          { family_id: string; client_id: string } | undefined;
-        if (reused?.family_id && reused.client_id === clientId) {
-          db.prepare("DELETE FROM refresh_tokens WHERE family_id=?").run(reused.family_id);
+      // Consume and create the successor in one synchronous SQLite transaction.
+      // Without this boundary, a replay can delete the family while the winner
+      // is awaiting JWT signing, after which the winner could insert a live child.
+      let row: { family_id: string; client_id: string; user_id: string; resource: string; scope: string; expires_at: number } | undefined;
+      let next = "";
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        row = db.prepare("UPDATE refresh_tokens SET used_at=? WHERE token_hash=? AND client_id=? AND expires_at>=? AND used_at IS NULL RETURNING family_id,client_id,user_id,resource,scope,expires_at")
+          .get(now, tokenHash, clientId, now) as typeof row;
+        if (!row) {
+          const reused = db.prepare("SELECT family_id,client_id FROM refresh_tokens WHERE token_hash=?").get(tokenHash) as
+            { family_id: string; client_id: string } | undefined;
+          if (reused?.family_id && reused.client_id === clientId) {
+            db.prepare("DELETE FROM refresh_tokens WHERE family_id=?").run(reused.family_id);
+          }
+          db.exec("COMMIT");
+          return sendError(res, 400, "invalid_grant");
         }
-        return sendError(res, 400, "invalid_grant");
+        next = randomToken();
+        db.prepare("INSERT INTO refresh_tokens(token_hash,family_id,client_id,user_id,resource,scope,expires_at) VALUES(?,?,?,?,?,?,?)")
+          .run(hash(next), row.family_id, clientId, row.user_id, row.resource, row.scope, Math.floor(Date.now() / 1000) + REFRESH_TTL);
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
       }
-      const next = randomToken();
-      db.prepare("INSERT INTO refresh_tokens(token_hash,family_id,client_id,user_id,resource,scope,expires_at) VALUES(?,?,?,?,?,?,?)")
-        .run(hash(next), row.family_id, clientId, row.user_id, row.resource, row.scope, Math.floor(Date.now() / 1000) + REFRESH_TTL);
+      if (!row) return sendError(res, 400, "invalid_grant");
       const access = await new SignJWT({ scope: row.scope })
         .setProtectedHeader({ alg: "RS256", kid: publicJwk.kid as string, typ: "at+jwt" })
         .setIssuer(ISSUER).setSubject(row.user_id).setAudience(row.resource)
@@ -468,9 +494,23 @@ export async function createLocalOAuthRouter() {
     sendError(res, 400, "unsupported_grant_type");
   });
 
-  router.post("/oauth/revoke", rateLimit("revoke", configuredLimit("MCP_OAUTH_REVOKE_LIMIT", 30), 60), (req, res) => {
+  router.post("/oauth/revoke", rateLimit("revoke", configuredLimit("MCP_OAUTH_REVOKE_LIMIT", 30), 60), async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Pragma", "no-cache");
+    const clientId = String(req.body?.client_id ?? "");
     const token = String(req.body?.token ?? "");
-    db.prepare("DELETE FROM refresh_tokens WHERE token_hash=?").run(hash(token));
+    const client = await resolveClient(clientId).catch(() => null);
+    if (!client) return sendError(res, 401, "invalid_client");
+
+    // Public clients identify themselves by client_id. A token from another
+    // client is a no-op, as required for a non-disclosing revocation response.
+    const row = db.prepare("SELECT family_id FROM refresh_tokens WHERE token_hash=? AND client_id=?")
+      .get(hash(token), clientId) as { family_id: string } | undefined;
+    if (row?.family_id) {
+      // Revoke the complete rotation family so an already-issued descendant
+      // refresh token cannot remain usable after revocation.
+      db.prepare("DELETE FROM refresh_tokens WHERE family_id=? AND client_id=?").run(row.family_id, clientId);
+    }
     res.status(200).end();
   });
 

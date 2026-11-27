@@ -40,8 +40,14 @@ export function loadOAuthConfig(): OAuthConfig {
   };
 }
 
+export function protectedResourceMetadataUri(config: Pick<OAuthConfig, "resource">): string {
+  const resource = new URL(config.resource);
+  const resourcePath = resource.pathname === "/" ? "" : resource.pathname;
+  return `${resource.origin}/.well-known/oauth-protected-resource${resourcePath}`;
+}
+
 export function createOAuthMiddleware(config: OAuthConfig): RequestHandler {
-  const metadataUri = `${config.resource.replace(/\/mcp$/, "")}/.well-known/oauth-protected-resource`;
+  const metadataUri = protectedResourceMetadataUri(config);
   const challenge = `Bearer resource_metadata="${metadataUri}", scope="${config.requiredScopes.join(" ")}"`;
   return async (req, res, next) => {
     const token = readBearerToken(req.header("authorization"));

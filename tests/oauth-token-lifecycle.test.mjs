@@ -18,6 +18,8 @@ process.env.MCP_OAUTH_ISSUER = "https://mcp.mrcute.space";
 process.env.MCP_RESOURCE_URL = "https://mcp.mrcute.space/mcp";
 process.env.MCP_OAUTH_SIGNING_PRIVATE_KEY = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
 process.env.MCP_OAUTH_SIGNING_KID = "oauth-lifecycle-test-key";
+// Keep the shared lifecycle fixture independent of the production DCR throttle.
+process.env.MCP_OAUTH_DCR_LIMIT = "1000";
 process.env.MCP_OAUTH_PREVIOUS_PUBLIC_KEYS = JSON.stringify([previousJwk]);
 
 const { createLocalOAuthRouter } = await import("../apps/mcp-gateway/dist/oauth-server.js");
@@ -54,12 +56,12 @@ async function postForm(path, values) {
   });
 }
 
-async function registerClient() {
+async function registerClient(redirectUri = "https://client.example/callback") {
   const response = await fetch(baseUrl + "/oauth/register", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      redirect_uris: ["https://client.example/callback"],
+      redirect_uris: [redirectUri],
       grant_types: ["authorization_code", "refresh_token"],
       token_endpoint_auth_method: "none"
     })
@@ -68,12 +70,12 @@ async function registerClient() {
   return (await response.json()).client_id;
 }
 
-async function authorizeAndGetCode(clientId) {
+async function authorizeAndGetCode(clientId, redirectUri = "https://client.example/callback") {
   const verifier = randomBytes(32).toString("base64url");
   const challenge = pkceS256(verifier);
   const params = new URLSearchParams({
     client_id: clientId,
-    redirect_uri: "https://client.example/callback",
+    redirect_uri: redirectUri,
     response_type: "code",
     code_challenge_method: "S256",
     code_challenge: challenge,
@@ -114,19 +116,19 @@ async function authorizeAndGetCode(clientId) {
   });
   assert.equal(consent.status, 303);
   const callback = new URL(consent.headers.get("location"));
-  assert.equal(callback.origin, "https://client.example");
-  assert.equal(callback.pathname, "/callback");
+  assert.equal(callback.origin, new URL(redirectUri).origin);
+  assert.equal(callback.pathname, new URL(redirectUri).pathname);
   assert.equal(callback.searchParams.get("state"), "lifecycle-state");
   assert.equal(callback.searchParams.get("iss"), issuer);
   return { code: callback.searchParams.get("code"), verifier };
 }
 
-async function exchangeCode(clientId, code, verifier) {
+async function exchangeCode(clientId, code, verifier, redirectUri = "https://client.example/callback") {
   return postForm("/oauth/token", {
     grant_type: "authorization_code",
     client_id: clientId,
     code,
-    redirect_uri: "https://client.example/callback",
+    redirect_uri: redirectUri,
     code_verifier: verifier,
     resource
   });
@@ -160,6 +162,16 @@ test("publishes OAuth metadata and JWKS with the configured issuer and key id", 
   assert.equal(jwks.keys[0].alg, "RS256");
   assert.equal(jwks.keys[0].use, "sig");
   assert.equal(jwks.keys[0].d, undefined);
+});
+
+
+test("preserves ChatGPT callback-ID redirect URI exactly through DCR and authorization", async () => {
+  const redirectUri = "https://chatgpt.com/connector/oauth/callback_7f3a9";
+  const clientId = await registerClient(redirectUri);
+  const { code, verifier } = await authorizeAndGetCode(clientId, redirectUri);
+  const callback = await exchangeCode(clientId, code, verifier, redirectUri);
+  assert.equal(callback.status, 200);
+  assert.ok((await callback.json()).access_token);
 });
 
 test("completes DCR, login, consent, PKCE token exchange and validates the signed access token", async () => {
@@ -196,6 +208,36 @@ test("completes DCR, login, consent, PKCE token exchange and validates the signe
   assert.equal((await replay.json()).error, "invalid_grant");
 });
 
+test("token exchange preserves a valid code after client, redirect URI or resource binding failures", async () => {
+  const clientId = await registerClient();
+  const otherClientId = await registerClient();
+  const { code, verifier } = await authorizeAndGetCode(clientId);
+
+  const invalidAttempts = [
+    { client_id: otherClientId, redirect_uri: "https://client.example/callback", resource },
+    { client_id: clientId, redirect_uri: "https://attacker.example/callback", resource },
+    { client_id: clientId, redirect_uri: "https://client.example/callback", resource: "https://other.example/mcp" }
+  ];
+  for (const attempt of invalidAttempts) {
+    const response = await postForm("/oauth/token", {
+      grant_type: "authorization_code",
+      client_id: attempt.client_id,
+      code,
+      redirect_uri: attempt.redirect_uri,
+      code_verifier: verifier,
+      resource: attempt.resource
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error, "invalid_grant");
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("pragma"), "no-cache");
+  }
+
+  const valid = await exchangeCode(clientId, code, verifier);
+  assert.equal(valid.status, 200);
+  assert.ok((await valid.json()).access_token);
+});
+
 test("rotates refresh tokens and revokes the entire family when a consumed token is reused", async () => {
   const clientId = await registerClient();
   const { code, verifier } = await authorizeAndGetCode(clientId);
@@ -217,18 +259,38 @@ test("rotates refresh tokens and revokes the entire family when a consumed token
   assert.equal((await familyRevoked.json()).error, "invalid_grant");
 });
 
-test("revokes a refresh token and rejects subsequent use", async () => {
+test("revocation is bound to its public client and removes the complete refresh-token family", async () => {
   const clientId = await registerClient();
+  const otherClientId = await registerClient();
   const { code, verifier } = await authorizeAndGetCode(clientId);
   const initial = await exchangeCode(clientId, code, verifier);
   assert.equal(initial.status, 200);
   const tokens = await initial.json();
+  const rotatedResponse = await exchangeRefresh(clientId, tokens.refresh_token);
+  assert.equal(rotatedResponse.status, 200);
+  const rotated = await rotatedResponse.json();
 
-  const revoke = await postForm("/oauth/revoke", { token: tokens.refresh_token });
+  const wrongClient = await postForm("/oauth/revoke", {
+    client_id: otherClientId,
+    token: rotated.refresh_token
+  });
+  assert.equal(wrongClient.status, 200);
+  const stillValid = await exchangeRefresh(clientId, rotated.refresh_token);
+  assert.equal(stillValid.status, 200);
+  const latest = await stillValid.json();
+
+  const revoke = await postForm("/oauth/revoke", {
+    client_id: clientId,
+    token: latest.refresh_token
+  });
   assert.equal(revoke.status, 200);
-  const afterRevoke = await exchangeRefresh(clientId, tokens.refresh_token);
-  assert.equal(afterRevoke.status, 400);
-  assert.equal((await afterRevoke.json()).error, "invalid_grant");
+  assert.equal(revoke.headers.get("cache-control"), "no-store");
+  assert.equal(revoke.headers.get("pragma"), "no-cache");
+  for (const token of [tokens.refresh_token, rotated.refresh_token, latest.refresh_token]) {
+    const afterRevoke = await exchangeRefresh(clientId, token);
+    assert.equal(afterRevoke.status, 400);
+    assert.equal((await afterRevoke.json()).error, "invalid_grant");
+  }
 });
 
 test("rejects browser login, consent and logout POSTs without an exact Origin", async () => {
@@ -252,6 +314,48 @@ test("rejects DCR registrations with non-HTTPS or malformed redirect URIs", asyn
     assert.equal(response.status, 400);
     assert.equal((await response.json()).error, "invalid_client_metadata");
   }
+});
+
+
+test("rejects unsupported DCR grants, response types and public-client authentication methods", async () => {
+  const base = { redirect_uris: ["https://client.example/callback"] };
+  const invalidMetadata = [
+    { ...base, grant_types: ["authorization_code", "password"] },
+    { ...base, grant_types: ["client_credentials"] },
+    { ...base, response_types: ["token"] },
+    { ...base, response_types: ["code", "token"] },
+    { ...base, token_endpoint_auth_method: "client_secret_post" },
+    { ...base, token_endpoint_auth_method: "private_key_jwt" },
+    { ...base, redirect_uris: ["https://client.example/callback", "https://client.example/callback"] }
+  ];
+
+  for (const metadata of invalidMetadata) {
+    const response = await fetch(baseUrl + "/oauth/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(metadata)
+    });
+    assert.equal(response.status, 400, JSON.stringify(metadata));
+    assert.equal((await response.json()).error, "invalid_client_metadata");
+  }
+});
+
+test("accepts only the supported public authorization-code client profile", async () => {
+  const response = await fetch(baseUrl + "/oauth/register", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      redirect_uris: ["https://client.example/callback"],
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      token_endpoint_auth_method: "none"
+    })
+  });
+  assert.equal(response.status, 201);
+  const client = await response.json();
+  assert.equal(client.token_endpoint_auth_method, "none");
+  assert.deepEqual(client.grant_types, ["authorization_code", "refresh_token"]);
+  assert.deepEqual(client.response_types, ["code"]);
 });
 
 test("authorization code can be consumed only once under concurrent token exchanges", async () => {
@@ -282,4 +386,31 @@ test("concurrent refresh-token reuse revokes the token family", async () => {
   assert.ok(rotated?.refresh_token);
   const familyRevoked = await exchangeRefresh(clientId, rotated.refresh_token);
   assert.equal(familyRevoked.status, 400);
+});
+
+
+test("DCR follows RFC 7591 default grant and enforces registered grant types", async () => {
+  const registration = await fetch(baseUrl + "/oauth/register", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ redirect_uris: ["https://client.example/callback"] })
+  });
+  assert.equal(registration.status, 201);
+  const client = await registration.json();
+  assert.deepEqual(client.grant_types, ["authorization_code"]);
+
+  const { code, verifier } = await authorizeAndGetCode(client.client_id);
+  const access = await exchangeCode(client.client_id, code, verifier);
+  assert.equal(access.status, 200);
+  const tokens = await access.json();
+  assert.ok(tokens.access_token);
+  assert.equal(tokens.refresh_token, undefined);
+
+  const refresh = await postForm("/oauth/token", {
+    grant_type: "refresh_token",
+    client_id: client.client_id,
+    refresh_token: "not-issued"
+  });
+  assert.equal(refresh.status, 400);
+  assert.equal((await refresh.json()).error, "unauthorized_client");
 });
