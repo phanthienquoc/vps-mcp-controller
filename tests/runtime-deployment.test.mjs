@@ -110,6 +110,6 @@ test("Root Agent installer installs a root-owned deploy entrypoint for an explic
   const installer = await read("../scripts/install-root-agent.sh");
   assert.match(installer, /VPS_DEPLOY_USER/);
   assert.match(installer, /install -o root -g root -m 0750 .*deploy-vps\\.sh/);
-  assert.match(installer, /NOPASSWD: \\/usr\\/local\\/sbin\\/vps-mcp-deploy \\*/);
+  assert.ok(installer.includes("NOPASSWD: /usr/local/sbin/vps-mcp-deploy *"));
   assert.match(installer, /visudo -cf/);
 });
