@@ -64,3 +64,8 @@ test("production deployment docs do not create a static bearer credential", asyn
   assert.match(docs, /production-only/i);
   assert.doesNotMatch(docs, /openssl rand -hex|--from-file=mcp-bearer-token/);
 });
+
+test("production gateway manifest does not mount a static bearer token", async () => {
+  const manifest = await read("../deploy/k3s/deployment.yaml");
+  assert.doesNotMatch(manifest, /MCP_BEARER_TOKEN|mcp-bearer-token|vps-mcp-secrets/);
+});
