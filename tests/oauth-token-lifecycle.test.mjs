@@ -234,3 +234,34 @@ test("rejects DCR registrations with non-HTTPS or malformed redirect URIs", asyn
     assert.equal((await response.json()).error, "invalid_client_metadata");
   }
 });
+
+test("authorization code can be consumed only once under concurrent token exchanges", async () => {
+  const clientId = await registerClient();
+  const { code, verifier } = await authorizeAndGetCode(clientId);
+  const responses = await Promise.all([
+    exchangeCode(clientId, code, verifier),
+    exchangeCode(clientId, code, verifier)
+  ]);
+  assert.deepEqual(responses.map((response) => response.status).sort(), [200, 400]);
+});
+
+test("concurrent refresh-token reuse revokes the token family", async () => {
+  const clientId = await registerClient();
+  const { code, verifier } = await authorizeAndGetCode(clientId);
+  const initial = await exchangeCode(clientId, code, verifier);
+  assert.equal(initial.status, 200);
+  const tokens = await initial.json();
+
+  const responses = await Promise.all([
+    exchangeRefresh(clientId, tokens.refresh_token),
+    exchangeRefresh(clientId, tokens.refresh_token)
+  ]);
+  assert.deepEqual(responses.map((response) => response.status).sort(), [200, 400]);
+  const successful = await responses.find(async (response) => response.status === 200)?.json();
+  // The reused token invalidates the complete family, including the winning rotated token.
+  const bodies = await Promise.all(responses.map(async (response) => response.status === 200 ? response.json() : null));
+  const rotated = bodies.find(Boolean) ?? successful;
+  assert.ok(rotated?.refresh_token);
+  const familyRevoked = await exchangeRefresh(clientId, rotated.refresh_token);
+  assert.equal(familyRevoked.status, 400);
+});
