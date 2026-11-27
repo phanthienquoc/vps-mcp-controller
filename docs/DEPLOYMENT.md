@@ -32,6 +32,14 @@ If the trusted checkout does not yet exist, stop and report that fact. Do not cl
 - Before publishing any image, the workflow verifies the pinned SSH host key, non-root remote UID, port 22, and a read-only `vps-mcp-deploy --preflight` check. That root-owned helper verifies the `tce-k3s-01` node, Root Agent/socket, isolated Node 26 runtime, root-owned non-writable checkout/manifests, ClusterIssuer, disk, and GHCR reachability.
 - OAuth issuer/client registration, persistent authorization-code/session storage, signing key rotation, JWKS, short-lived scoped audience-bound tokens and revocation, all provisioned through a reviewed secret-management process.
 
+After OAuth review and separate authorization for privileged bootstrap, install the Root Agent and deploy entrypoint with the pre-created account:
+
+~~~bash
+sudo VPS_DEPLOY_USER=<dedicated-non-root-user> bash /opt/vps-mcp-controller/scripts/install-root-agent.sh
+~~~
+
+This installs the isolated Node 26 runtime, Root Agent service, root-owned deploy entrypoint, and a command-scoped sudoers rule. It does not deploy the Gateway. The GitHub workflow's remote preflight must pass before image publication.
+
 Never send private keys, passwords, client secrets or tokens through ChatGPT.
 
 ## Authorization gate
