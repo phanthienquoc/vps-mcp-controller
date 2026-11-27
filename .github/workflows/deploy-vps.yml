@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   packages: write
 
@@ -23,7 +24,9 @@ jobs:
       - name: Validate immutable source and deployment gates
         env:
           MCP_OAUTH_PRODUCTION_READY: ${{ vars.MCP_OAUTH_PRODUCTION_READY }}
+          VPS_TARGET_ID: ${{ vars.VPS_TARGET_ID }}
           VPS_HOST: ${{ vars.VPS_HOST }}
+          GH_TOKEN: ${{ github.token }}
           VPS_USER: ${{ vars.VPS_USER }}
           VPS_SSH_PORT: ${{ vars.VPS_SSH_PORT || '22' }}
           VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
@@ -33,7 +36,21 @@ jobs:
           set -euo pipefail
           [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+          CI_RUNS="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" -f head_sha="$GITHUB_SHA" -f branch=master -F per_page=50)"
+          CI_RUN="$(jq -c --arg sha "$GITHUB_SHA" '.workflow_runs[] | select(.head_sha == $sha and .head_branch == "master" and .event == "push")' <<< "$CI_RUNS" | tail -n 1)"
+          if [[ -z "$CI_RUN" ]]; then
+            echo "::error::No CI push run exists for the exact selected master commit."
+            exit 1
+          fi
+          if [[ "$(jq -r '.status' <<< "$CI_RUN")" != "completed" || "$(jq -r '.conclusion' <<< "$CI_RUN")" != "success" ]]; then
+            echo "::error::CI for the exact selected master commit has not completed successfully."
+            exit 1
+          fi
+          echo "Verified successful CI run $(jq -r '.id' <<< "$CI_RUN") for the selected immutable commit."
+
           test "$MCP_OAUTH_PRODUCTION_READY" = "true"
+          test "$VPS_TARGET_ID" = "tce-k3s-01"
           test -n "$VPS_HOST"
           [[ "$VPS_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]
           test -n "$VPS_USER"
@@ -64,6 +81,7 @@ jobs:
 
       - name: Run read-only VPS preflight before publishing
         env:
+          VPS_TARGET_ID: ${{ vars.VPS_TARGET_ID }}
           VPS_HOST: ${{ vars.VPS_HOST }}
           VPS_USER: ${{ vars.VPS_USER }}
           VPS_SSH_PORT: ${{ vars.VPS_SSH_PORT || '22' }}
@@ -75,7 +93,11 @@ jobs:
           PREFLIGHT_OUTPUT="$("${SSH[@]}" "$VPS_USER@$VPS_HOST" "sudo -n /usr/local/sbin/vps-mcp-preflight")"
           SUMMARY="$(printf '%s\n' "$PREFLIGHT_OUTPUT" | grep '^Summary:' | tail -n 1)"
           test -n "$SUMMARY"
-          printf 'Read-only VPS preflight passed: %s\n' "$SUMMARY"
+          if ! grep -Fq "Expected node ${VPS_TARGET_ID} is Ready" <<< "$PREFLIGHT_OUTPUT"; then
+            echo "::error::Read-only VPS preflight did not confirm the configured target node."
+            exit 1
+          fi
+          printf 'Read-only VPS preflight passed for %s: %s\n' "$VPS_TARGET_ID" "$SUMMARY"
 
       - name: Build and publish immutable multi-architecture gateway image
         env:
@@ -110,7 +132,7 @@ jobs:
         run: |
           {
             echo "### VPS MCP deployment succeeded"
-            echo "- Host: tce-k3s-01"
+            echo "- Target: ${VPS_TARGET_ID}"
             echo "- Revision: ${GITHUB_SHA}"
             echo "- Image: ghcr.io/phanthienquoc/vps-mcp-controller:${GITHUB_SHA}"
             echo "- Platforms: linux/amd64, linux/arm64"
