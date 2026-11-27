@@ -1,5 +1,5 @@
 import { randomBytes, createHash, scryptSync, timingSafeEqual, createPublicKey } from "node:crypto";
-import { isAllowedRedirectUri, verifyPkceS256 } from "./oauth-helpers.js";
+import { isAllowedRedirectUri, parseOAuthScopes, verifyPkceS256 } from "./oauth-helpers.js";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -191,7 +191,7 @@ export async function createLocalOAuthRouter() {
       return sendError(res, 400, "invalid_request", "Authorization Code with PKCE S256 is required");
     }
     if (p.get("resource") !== RESOURCE) return sendError(res, 400, "invalid_target");
-    const scopes = (p.get("scope") ?? "").split(/\\s+/).filter(Boolean);
+    const scopes = parseOAuthScopes(p.get("scope") ?? "");
     if (!scopes.includes(SCOPE) || scopes.some((s) => s !== SCOPE)) return sendError(res, 400, "invalid_scope");
     const state = randomToken(24);
     const serialized = Buffer.from(p.toString()).toString("base64url");
