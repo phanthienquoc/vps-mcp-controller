@@ -224,7 +224,7 @@ export async function createLocalOAuthRouter() {
     token_endpoint_auth_methods_supported: ["none"],
     client_id_metadata_document_supported: false,
     scopes_supported: [SCOPE],
-    authorization_response_iss_parameter_supported: true,
+    authorization_response_iss_parameter_supported: false,
   };
 
   router.get("/.well-known/oauth-authorization-server", (_req, res) => res.json(authMetadata));
