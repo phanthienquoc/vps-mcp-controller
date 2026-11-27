@@ -12,6 +12,63 @@ has(){ command -v "$1" >/dev/null 2>&1; }
 printf 'VPS MCP Controller preflight (read-only)\n'
 printf 'Host: %s | User: %s\n\n' "$(hostname)" "$(id -un)"
 
+REPO_DIR="/opt/vps-mcp-controller"
+CHECK_USER="${SUDO_USER:-$(id -un)}"
+check_trusted_path() {
+  local path="$1"
+  if [[ ! -e "$path" || -L "$path" ]]; then
+    fail "Trusted deployment path missing or symlinked: $path"
+    return
+  fi
+  if [[ "$(stat -c '%U:%G' "$path")" != "root:root" ]]; then
+    fail "Trusted deployment path is not root:root owned: $path"
+    return
+  fi
+  if [[ "$CHECK_USER" != "root" ]]; then
+    if [[ "$CHECK_USER" == "$(id -un)" ]]; then
+      if [[ -w "$path" ]]; then
+        fail "SSH user can write trusted deployment path: $path"
+        return
+      fi
+    elif sudo -n -u "$CHECK_USER" test -w "$path"; then
+      fail "SSH user can write trusted deployment path: $path"
+      return
+    fi
+  fi
+  ok "Root-owned and not writable by $CHECK_USER: $path"
+}
+
+if [[ -d /opt ]]; then
+  check_trusted_path "/opt"
+  if find /opt -maxdepth 0 -perm /022 -print -quit | grep -q .; then
+    fail "/opt is group/world-writable"
+  else
+    ok "/opt is not group/world-writable"
+  fi
+else
+  fail "/opt directory is missing"
+fi
+
+if [[ -d "$REPO_DIR/.git" ]]; then
+  if find "$REPO_DIR" -xdev \( -type d -o -type f \) \( ! -user root -o -perm /022 \) -print -quit | grep -q .; then
+    fail "Checkout contains non-root-owned or group/world-writable files"
+  else
+    ok "Checkout files are root-owned and not group/world-writable"
+  fi
+  check_trusted_path "$REPO_DIR"
+  check_trusted_path "$REPO_DIR/deploy/k3s"
+  check_trusted_path "$REPO_DIR/deploy/k3s/deployment.yaml"
+  check_trusted_path "$REPO_DIR/scripts/deploy-vps.sh"
+else
+  fail "Trusted root-owned checkout missing at $REPO_DIR"
+fi
+
+if [[ -x /usr/local/sbin/vps-mcp-deploy ]]; then
+  check_trusted_path "/usr/local/sbin/vps-mcp-deploy"
+else
+  warn "Root deploy entrypoint is not installed yet (expected before deployment)"
+fi
+
 if has node; then
   NODE_MAJOR="$(node -p 'Number(process.versions.node.split(".")[0])')"
   if [[ "$NODE_MAJOR" -eq 26 ]]; then ok "Node.js $(node --version)"; else fail "Node.js 26 required; found $(node --version)"; fi

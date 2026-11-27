@@ -20,12 +20,18 @@ jobs:
       - name: Checkout selected master revision
         uses: actions/checkout@v4
 
+      - name: Validate immutable source revision
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
       - name: Build and publish immutable gateway image
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          echo "$GHCR_TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           docker buildx build \
             --platform linux/amd64 \
             --file apps/mcp-gateway/Dockerfile \
@@ -46,7 +52,7 @@ jobs:
           chmod 600 ~/.ssh/vps_deploy ~/.ssh/known_hosts
           ssh-keygen -y -f ~/.ssh/vps_deploy >/dev/null
 
-      - name: Fetch exact revision and deploy
+      - name: Invoke root-owned deploy entrypoint
         env:
           VPS_HOST: ${{ vars.VPS_HOST }}
           VPS_USER: ${{ vars.VPS_USER }}
@@ -62,9 +68,8 @@ jobs:
             -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts)
 
-          "${SSH[@]}" "$VPS_USER@$VPS_HOST" \
-            "git -C /opt/vps-mcp-controller fetch --depth=1 origin master && git -C /opt/vps-mcp-controller checkout --detach '$GITHUB_SHA'"
-
+          # The SSH deploy user never fetches, checks out or writes repository files.
+          # The root-owned entrypoint verifies GITHUB_SHA against origin/master.
           printf '%s' "$GHCR_READ_TOKEN" | "${SSH[@]}" "$VPS_USER@$VPS_HOST" \
             "sudo -n /usr/local/sbin/vps-mcp-deploy '$GITHUB_SHA'"
 
