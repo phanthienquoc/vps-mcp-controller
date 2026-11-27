@@ -15,6 +15,8 @@ test("rejects mismatched and malformed PKCE values", () => {
 
 test("only allows exact HTTPS redirect URI registrations", () => {
   assert.equal(isAllowedRedirectUri("https://chatgpt.com/connector_platform_oauth_redirect"), true);
+  assert.equal(isAllowedRedirectUri("https://chatgpt.com/connector/oauth/callback_7f3a9"), true);
+  assert.equal(isAllowedRedirectUri("https://chatgpt.com/connector/oauth/{callback_id}"), true);
   assert.equal(isAllowedRedirectUri("http://chatgpt.com/callback"), false);
   assert.equal(isAllowedRedirectUri("javascript:alert(1)"), false);
   assert.equal(isAllowedRedirectUri("https://user:pass@example.com/callback"), false);
