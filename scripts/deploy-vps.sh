@@ -105,7 +105,7 @@ if ! "${KUBECTL[@]}" -n "$NAMESPACE" get secret "$OAUTH_SECRET" >/dev/null 2>&1;
   echo "Required OAuth Secret $OAUTH_SECRET is missing; provision it out of band" >&2
   exit 1
 fi
-SECRET_KEYS="$("${KUBECTL[@]}" -n "$NAMESPACE" get secret "$OAUTH_SECRET" -o go-template='{{range $k,$v := .data}}{{printf "%s\\n" $k}}{{end}}')"
+SECRET_KEYS="$("${KUBECTL[@]}" -n "$NAMESPACE" get secret "$OAUTH_SECRET" -o go-template='{{range $k,$v := .data}}{{printf "%s\n" $k}}{{end}}')"
 for key in MCP_BOOTSTRAP_EMAIL MCP_BOOTSTRAP_PASSWORD MCP_OAUTH_SIGNING_PRIVATE_KEY MCP_OAUTH_SIGNING_KID; do
   if ! grep -Fxq "$key" <<<"$SECRET_KEYS"; then
     echo "Required key $key is missing from $OAUTH_SECRET" >&2
@@ -147,7 +147,7 @@ auth = base64.b64encode(f"phanthienquoc:{token}".encode("utf-8")).decode("ascii"
 fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 with os.fdopen(fd, "w", encoding="utf-8") as handle:
     json.dump({"auths": {"ghcr.io": {"auth": auth}}}, handle)
-    handle.write("\\n")
+    handle.write("\n")
 PY
   unset GHCR_TOKEN
   if [[ "$(stat -c '%a' "$DOCKER_CONFIG_DIR/config.json")" != "600" ]]; then
