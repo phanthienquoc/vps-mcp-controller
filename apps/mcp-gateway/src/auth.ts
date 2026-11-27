@@ -19,10 +19,10 @@ export type OAuthConfig = {
 };
 
 function requiredHttpsUrl(name: string, value: string | undefined): URL {
-  if (!value) throw new Error(\`Missing required OAuth configuration: \${name}\`);
+  if (!value) throw new Error(`Missing required OAuth configuration: ${name}`);
   const url = new URL(value);
   if (url.protocol !== "https:" || url.username || url.password || url.hash) {
-    throw new Error(\`\${name} must be an HTTPS URL without credentials or fragment\`);
+    throw new Error(`${name} must be an HTTPS URL without credentials or fragment`);
   }
   return url;
 }
@@ -46,7 +46,7 @@ export function readBearerToken(header: string | undefined): string | null {
 
 export async function loadOAuthConfig(): Promise<OAuthConfig> {
   const issuerValue = process.env.MCP_OAUTH_ISSUER;
-  const issuerUrl = requiredHttpsUrl("MCP_OAUTH_ISSUER", issuerValue);
+  requiredHttpsUrl("MCP_OAUTH_ISSUER", issuerValue);
   const metadataUrl = requiredHttpsUrl("MCP_OAUTH_METADATA_URL", process.env.MCP_OAUTH_METADATA_URL);
   const resourceUrl = requiredHttpsUrl(
     "MCP_RESOURCE_URL",
@@ -64,7 +64,7 @@ export async function loadOAuthConfig(): Promise<OAuthConfig> {
     headers: { accept: "application/json" },
     signal: AbortSignal.timeout(8000),
   });
-  if (!response.ok) throw new Error(\`OAuth metadata endpoint returned HTTP \${response.status}\`);
+  if (!response.ok) throw new Error(`OAuth/OIDC metadata endpoint returned HTTP ${response.status}`);
   const metadata = await response.json() as AuthorizationServerMetadata;
   if (metadata.issuer !== issuer) throw new Error("OAuth metadata issuer does not exactly match MCP_OAUTH_ISSUER");
   if (typeof metadata.authorization_endpoint !== "string" || typeof metadata.token_endpoint !== "string") {
@@ -89,15 +89,15 @@ export async function loadOAuthConfig(): Promise<OAuthConfig> {
 
   return {
     issuer,
-    resource: resourceUrl.toString(),
+    resource,
     requiredScopes,
     jwks: createRemoteJWKSet(jwksUrl, { timeoutDuration: 5000, cooldownDuration: 30000 }),
   };
 }
 
 export function createOAuthMiddleware(config: OAuthConfig): RequestHandler {
-  const metadataUri = \`\${config.resource.replace(/\/mcp$/, "")}/.well-known/oauth-protected-resource\`;
-  const challenge = \`Bearer resource_metadata="\${metadataUri}", scope="\${config.requiredScopes.join(" ")}"\`;
+  const metadataUri = `${config.resource.replace(/\/mcp$/, "")}/.well-known/oauth-protected-resource`;
+  const challenge = `Bearer resource_metadata="${metadataUri}", scope="${config.requiredScopes.join(" ")}"`;
   return async (req, res, next) => {
     const token = readBearerToken(req.header("authorization"));
     if (!token) {
@@ -122,7 +122,7 @@ export function createOAuthMiddleware(config: OAuthConfig): RequestHandler {
       res.locals.oauth = { subject: payload.sub, scopes: config.requiredScopes };
       next();
     } catch {
-      res.setHeader("WWW-Authenticate", \`Bearer error="invalid_token", \${challenge.slice(7)}\`);
+      res.setHeader("WWW-Authenticate", `Bearer error="invalid_token", ${challenge.slice(7)}`);
       res.status(401).json({ error: "invalid_token" });
     }
   };
