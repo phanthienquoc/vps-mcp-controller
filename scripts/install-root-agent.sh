@@ -7,6 +7,16 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
+DEPLOY_USER="${VPS_DEPLOY_USER:-}"
+if [[ -z "$DEPLOY_USER" || "$DEPLOY_USER" == "root" || ! "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]]; then
+  echo "Set VPS_DEPLOY_USER to an existing dedicated non-root deploy account." >&2
+  exit 1
+fi
+if ! id "$DEPLOY_USER" >/dev/null 2>&1; then
+  echo "VPS_DEPLOY_USER does not exist; create the dedicated account through your approved host-access process." >&2
+  exit 1
+fi
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 if [[ "$ROOT_DIR" != "$INSTALL_DIR" || ! -d "$INSTALL_DIR/.git" ]]; then
@@ -30,6 +40,10 @@ if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]] \
   echo "The invoking SSH user must not be able to write the trusted checkout" >&2
   exit 1
 fi
+if sudo -u "$DEPLOY_USER" test -w /opt || sudo -u "$DEPLOY_USER" test -w "$INSTALL_DIR" || sudo -u "$DEPLOY_USER" test -w "$INSTALL_DIR/deploy/k3s"; then
+  echo "The dedicated deploy user must not be able to write the trusted checkout or manifests" >&2
+  exit 1
+fi
 
 # Install a checksum-verified Node 26 runtime inside this trusted checkout.
 # This does not install or modify a system-wide Node.js/npm package.
@@ -44,6 +58,28 @@ if [[ "$node_major" -ne 26 ]]; then echo "Isolated Node.js 26 is required."; exi
 "$NPM_BIN" run build
 getent group vps-mcp >/dev/null || groupadd --system --gid 34001 vps-mcp
 install -d -o root -g vps-mcp -m 0750 /run/vps-mcp
+# Install the immutable root-owned deployment entrypoint and a command-scoped sudo rule.
+if [[ -e /usr/local/sbin/vps-mcp-deploy || -L /usr/local/sbin/vps-mcp-deploy ]]; then
+  [[ ! -L /usr/local/sbin/vps-mcp-deploy ]] || { echo "Refusing symlinked deploy entrypoint" >&2; exit 1; }
+  [[ "$(stat -c '%U:%G' /usr/local/sbin/vps-mcp-deploy)" == "root:root" ]] || { echo "Existing deploy entrypoint is not root-owned" >&2; exit 1; }
+fi
+install -o root -g root -m 0750 "$INSTALL_DIR/scripts/deploy-vps.sh" /usr/local/sbin/vps-mcp-deploy
+
+SUDOERS_PATH="/etc/sudoers.d/vps-mcp-deploy"
+SUDOERS_TMP="$(mktemp)"
+trap 'rm -f -- "$SUDOERS_TMP"' EXIT
+printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/vps-mcp-deploy *\n' "$DEPLOY_USER" > "$SUDOERS_TMP"
+chmod 0440 "$SUDOERS_TMP"
+visudo -cf "$SUDOERS_TMP"
+if [[ -e "$SUDOERS_PATH" ]]; then
+  cmp -s "$SUDOERS_TMP" "$SUDOERS_PATH" || { echo "Existing $SUDOERS_PATH differs; review it manually" >&2; exit 1; }
+else
+  install -o root -g root -m 0440 "$SUDOERS_TMP" "$SUDOERS_PATH"
+fi
+rm -f -- "$SUDOERS_TMP"
+trap - EXIT
+visudo -cf "$SUDOERS_PATH"
+
 install -m 0644 "$ROOT_DIR/deploy/systemd/vps-root-agent.service" /etc/systemd/system/vps-root-agent.service
 systemctl daemon-reload
 systemctl enable --now vps-root-agent.service
