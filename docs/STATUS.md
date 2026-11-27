@@ -16,7 +16,7 @@ Updated: 2026-11-27
 
 ## Not production-ready until verified
 
-- [x] Node 26 CI: typecheck, build, unit tests and integration tests passed on code commit `8a993a5`; the latest documentation-only commit is being revalidated.
+- [x] Node 26 CI: typecheck, build, unit tests and integration tests passed on code commit `8a993a5`; both push and pull-request workflows also passed on documentation commit `b49725d`.
 - [x] Add automated end-to-end PKCE/DCR/login/token/refresh/revocation tests, including code/refresh replay races and missing-Origin CSRF cases.
 - [ ] Verify actual ChatGPT callback URI and DCR interoperability against the ChatGPT connector UI.
 - [ ] Add user password reset/change, multi-user administration and MFA before broader access.
