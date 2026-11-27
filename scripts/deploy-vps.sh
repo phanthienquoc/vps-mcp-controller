@@ -2,11 +2,6 @@
 set -Eeuo pipefail
 umask 077
 
-SHA="${1:-}"
-if [[ ! "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "Usage: vps-mcp-deploy <40-character-commit-sha>" >&2
-  exit 2
-fi
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "The deploy entrypoint must run as root" >&2
   exit 1
@@ -92,6 +87,12 @@ if [[ "${1:-}" == "--preflight" ]]; then
 
   echo "Read-only deployment preflight passed for tce-k3s-01"
   exit 0
+fi
+
+SHA="${1:-}"
+if [[ ! "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "Usage: vps-mcp-deploy <40-character-commit-sha>" >&2
+  exit 2
 fi
 
 # Fail closed: the gateway still uses a static bearer verifier and is not production ChatGPT OAuth.
