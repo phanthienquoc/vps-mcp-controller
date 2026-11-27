@@ -109,7 +109,7 @@ test("root deploy entrypoint requires the exact tce-k3s-01 node to be Ready befo
 test("Root Agent installer installs a root-owned deploy entrypoint for an explicit non-root deploy user", async () => {
   const installer = await read("../scripts/install-root-agent.sh");
   assert.match(installer, /VPS_DEPLOY_USER/);
-  assert.match(installer, /install -o root -g root -m 0750 .*deploy-vps\\.sh/);
+  assert.ok(installer.includes('install -o root -g root -m 0750 "$INSTALL_DIR/scripts/deploy-vps.sh" /usr/local/sbin/vps-mcp-deploy'));
   assert.ok(installer.includes("NOPASSWD: /usr/local/sbin/vps-mcp-deploy *"));
   assert.match(installer, /visudo -cf/);
 });
