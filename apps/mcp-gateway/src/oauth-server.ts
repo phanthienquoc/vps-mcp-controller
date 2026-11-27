@@ -1,4 +1,6 @@
-import { randomBytes, createHash, scryptSync, timingSafeEqual } from "node:crypto";
+import { randomBytes, createHash, scryptSync, timingSafeEqual, createPublicKey } from "node:crypto";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Router, type Request, type Response } from "express";
 import { SignJWT, importPKCS8, exportJWK, type JWK } from "jose";
@@ -12,6 +14,7 @@ const SESSION_TTL = 8 * 60 * 60;
 const REFRESH_TTL = 30 * 24 * 60 * 60;
 const SCOPE = "mcp:tools";
 
+mkdirSync(dirname(DB_PATH), { recursive: true, mode: 0o700 });
 const db = new DatabaseSync(DB_PATH);
 db.exec(\`
   PRAGMA journal_mode = WAL;
@@ -33,6 +36,9 @@ db.exec(\`
     code_hash TEXT PRIMARY KEY, client_id TEXT NOT NULL, user_id TEXT NOT NULL,
     redirect_uri TEXT NOT NULL, challenge TEXT NOT NULL, resource TEXT NOT NULL,
     scope TEXT NOT NULL, expires_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS login_attempts (
+    attempt_key TEXT PRIMARY KEY, failures INTEGER NOT NULL, window_started INTEGER NOT NULL, locked_until INTEGER
   );
   CREATE TABLE IF NOT EXISTS refresh_tokens (
     token_hash TEXT PRIMARY KEY, family_id TEXT NOT NULL, client_id TEXT NOT NULL,
@@ -75,8 +81,7 @@ function ensureBootstrapUser(): void {
 const signingKeyPem = process.env.MCP_OAUTH_SIGNING_PRIVATE_KEY;
 if (!signingKeyPem) throw new Error("MCP_OAUTH_SIGNING_PRIVATE_KEY is required");
 const signingKey = await importPKCS8(signingKeyPem.replace(/\\n/g, "\n"), "RS256");
-const publicJwk = await exportJWK(signingKey as never) as JWK;
-delete publicJwk.d;
+const publicJwk = await exportJWK(createPublicKey(signingKeyPem.replace(/\\n/g, "\n")) as never) as JWK;
 publicJwk.use = "sig";
 publicJwk.alg = "RS256";
 publicJwk.kid = process.env.MCP_OAUTH_SIGNING_KID ?? "mcp-key-1";
@@ -150,7 +155,7 @@ export async function createLocalOAuthRouter() {
     grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["none"],
-    client_id_metadata_document_supported: true,
+    client_id_metadata_document_supported: false,
     scopes_supported: [SCOPE],
     authorization_response_iss_parameter_supported: true,
   };
@@ -210,13 +215,27 @@ export async function createLocalOAuthRouter() {
     try { p = new URLSearchParams(Buffer.from(request, "base64url").toString("utf8")); } catch { return sendError(res, 400, "invalid_request"); }
     const email = String(req.body?.email ?? "").trim().toLowerCase();
     const password = String(req.body?.password ?? "");
+    const attemptKey = hash(`${req.ip ?? "unknown"}|${email}`);
+    const now = Math.floor(Date.now() / 1000);
+    const attempt = db.prepare("SELECT failures,window_started,locked_until FROM login_attempts WHERE attempt_key=?").get(attemptKey) as
+      { failures: number; window_started: number; locked_until: number | null } | undefined;
+    if (attempt?.locked_until && attempt.locked_until > now) {
+      res.status(429).type("html").send(page("Please wait", "<p>Too many sign-in attempts. Try again later.</p>"));
+      return;
+    }
     const user = db.prepare("SELECT id,salt,password_hash FROM users WHERE email=? AND active=1").get(email) as
       { id: string; salt: string; password_hash: string } | undefined;
     const calculated = user ? scryptSync(password, user.salt, 64).toString("hex") : "0".repeat(128);
     if (!user || !safeEqual(calculated, user.password_hash)) {
-      res.status(401).type("html").send(page("Sign in failed", \`<p>Invalid email or password.</p><a href="/oauth/authorize?\${htmlEscape(p.toString())}">Try again</a>\`));
+      const windowStart = attempt && now - attempt.window_started < 900 ? attempt.window_started : now;
+      const failures = attempt && windowStart === attempt.window_started ? attempt.failures + 1 : 1;
+      const lockedUntil = failures >= 8 ? now + 900 : null;
+      db.prepare("INSERT INTO login_attempts(attempt_key,failures,window_started,locked_until) VALUES(?,?,?,?) ON CONFLICT(attempt_key) DO UPDATE SET failures=excluded.failures,window_started=excluded.window_started,locked_until=excluded.locked_until")
+        .run(attemptKey, failures, windowStart, lockedUntil);
+      res.status(401).type("html").send(page("Sign in failed", `<p>Invalid email or password.</p><a href="/oauth/authorize?${htmlEscape(p.toString())}">Try again</a>`));
       return;
     }
+    db.prepare("DELETE FROM login_attempts WHERE attempt_key=?").run(attemptKey);
     const session = randomToken();
     db.prepare("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)")
       .run(hash(session), user.id, Math.floor(Date.now() / 1000) + SESSION_TTL);
