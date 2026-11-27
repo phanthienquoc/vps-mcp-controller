@@ -63,7 +63,7 @@ if has k3s; then
     ok "Production namespace ops-prod exists"
     if k3s kubectl -n ops-prod get secret mcp-mrcute-space-tls >/dev/null 2>&1; then ok "Production TLS secret exists"; else warn "Production TLS secret missing; deploy entrypoint provisions it"; fi
 
-    OAUTH_KEYS="$(k3s kubectl -n ops-prod get secret mcp-oauth-secrets -o go-template='{{range $k,$v := .data}}{{printf "%s\\n" $k}}{{end}}' 2>/dev/null || true)"
+    OAUTH_KEYS="$(k3s kubectl -n ops-prod get secret mcp-oauth-secrets -o go-template='{{range $k,$v := .data}}{{printf "%s\n" $k}}{{end}}' 2>/dev/null || true)"
     if [[ -n "$OAUTH_KEYS" ]]; then
       MISSING=()
       for key in MCP_BOOTSTRAP_EMAIL MCP_BOOTSTRAP_PASSWORD MCP_OAUTH_SIGNING_PRIVATE_KEY MCP_OAUTH_SIGNING_KID; do
