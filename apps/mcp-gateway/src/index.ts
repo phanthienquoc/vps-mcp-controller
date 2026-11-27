@@ -52,7 +52,11 @@ const handler = createMcpHandler(() => {
     const r = await callRootAgent({ action: "k3s.pods" });
     return { content: [{ type: "text", text: r.output ?? "No output" }] };
   });
-  server.registerTool("k3s_restart_deployment", { description: "Restart and verify a deployment in ops-prod or tce-prod only. Stock and media namespaces are not enabled for autonomous mutation.", inputSchema: z.object({ namespace: z.enum(["ops-prod", "tce-prod"]), deployment: z.string().regex(/^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/).max(253) }) }, async ({ namespace, deployment }) => {
+  const restartInput = z.discriminatedUnion("namespace", [
+    z.object({ namespace: z.literal("ops-prod"), deployment: z.literal("vps-mcp-gateway") }),
+    z.object({ namespace: z.literal("tce-prod"), deployment: z.enum(["tce-frontend", "tce-service"]) })
+  ]);
+  server.registerTool("k3s_restart_deployment", { description: "Restart only vps-mcp-gateway in ops-prod or tce-frontend/tce-service in tce-prod. Stock and media namespaces and all other deployments are denied.", inputSchema: restartInput }, async ({ namespace, deployment }) => {
     const r = await callRootAgent({ action: "k3s.rolloutRestart", namespace, deployment });
     return { content: [{ type: "text", text: r.output ?? "No output" }] };
   });
