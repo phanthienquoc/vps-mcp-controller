@@ -63,7 +63,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf -- "$TMP"' EXIT
 git -C "$REPO_DIR" archive --format=tar "$SHA" deploy/k3s | tar -xf - -C "$TMP"
 MANIFEST_DIR="$TMP/deploy/k3s"
-for manifest in namespace.yaml deployment.yaml service.yaml ingress.yaml; do
+for manifest in namespace.yaml certificate.yaml deployment.yaml service.yaml ingress.yaml; do
   if [[ ! -f "$MANIFEST_DIR/$manifest" || -L "$MANIFEST_DIR/$manifest" ]]; then
     echo "Trusted revision is missing a regular deploy/k3s/$manifest manifest" >&2
     exit 1
@@ -85,7 +85,15 @@ if [[ ! -S /run/vps-mcp/root-agent.sock ]]; then
 fi
 
 "${KUBECTL[@]}" get nodes >/dev/null
+"${KUBECTL[@]}" apply -f "$MANIFEST_DIR/namespace.yaml"
 "${KUBECTL[@]}" -n "$NAMESPACE" get secret vps-mcp-secrets >/dev/null
+ISSUER_READY="$("${KUBECTL[@]}" get clusterissuer letsencrypt-prod -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+if [[ "$ISSUER_READY" != "True" ]]; then
+  echo "cert-manager ClusterIssuer letsencrypt-prod is not Ready" >&2
+  exit 1
+fi
+"${KUBECTL[@]}" apply -f "$MANIFEST_DIR/certificate.yaml"
+"${KUBECTL[@]}" -n "$NAMESPACE" wait --for=condition=Ready certificate/mcp-mrcute-space --timeout=300s
 "${KUBECTL[@]}" -n "$NAMESPACE" get secret mcp-mrcute-space-tls >/dev/null
 
 # The workflow streams the read-only GHCR credential over SSH stdin, never as an argument.
@@ -135,7 +143,6 @@ if grep -q 'REPLACE_WITH_VERIFIED_SHA_TAG' "$TMP/deployment.yaml"; then
   exit 1
 fi
 
-"${KUBECTL[@]}" apply -f "$MANIFEST_DIR/namespace.yaml"
 "${KUBECTL[@]}" apply -f "$TMP/deployment.yaml"
 "${KUBECTL[@]}" apply -f "$MANIFEST_DIR/service.yaml"
 "${KUBECTL[@]}" apply -f "$MANIFEST_DIR/ingress.yaml"
