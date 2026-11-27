@@ -10,9 +10,10 @@ Group=root
 UMask=0007
 Environment=ROOT_AGENT_SOCKET=/run/vps-mcp/root-agent.sock
 Environment=ROOT_AGENT_GID=34001
+Environment=PATH=/opt/vps-mcp-controller/runtime/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WorkingDirectory=/opt/vps-mcp-controller
 ExecStartPre=/usr/bin/install -d -o root -g 34001 -m 0750 /run/vps-mcp
-ExecStart=/usr/bin/node /opt/vps-mcp-controller/apps/root-agent/dist/index.js
+ExecStart=/opt/vps-mcp-controller/runtime/node/bin/node /opt/vps-mcp-controller/apps/root-agent/dist/index.js
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=10
