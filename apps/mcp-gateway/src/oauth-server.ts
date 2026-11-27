@@ -1,5 +1,5 @@
 import { randomBytes, createHash, scryptSync, timingSafeEqual, createPublicKey } from "node:crypto";
-import { isAllowedRedirectUri, parseOAuthScopes, verifyPkceS256 } from "./oauth-helpers.js";
+import { isAllowedRedirectUri, parseOAuthScopes, pkceS256 } from "./oauth-helpers.js";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -50,6 +50,10 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS authorization_transactions (
     transaction_hash TEXT PRIMARY KEY, request_query TEXT NOT NULL, expires_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS oauth_rate_limits (
+    bucket_key TEXT PRIMARY KEY, window_started INTEGER NOT NULL, hits INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS oauth_rate_limits_window_idx ON oauth_rate_limits(window_started);
 `);
 
 function hash(value: string): string {
@@ -63,6 +67,45 @@ function safeEqual(a: string, b: string): boolean {
   const bb = Buffer.from(b);
   return aa.length === bb.length && timingSafeEqual(aa, bb);
 }
+function configuredLimit(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > 1_000_000) {
+    throw new Error(`${name} must be an integer between 1 and 1000000`);
+  }
+  return value;
+}
+
+function rateLimit(bucket: string, limit: number, windowSeconds: number) {
+  return (req: Request, res: Response, next: (error?: unknown) => void): void => {
+    // Express trust proxy remains disabled by default. req.ip therefore comes
+    // from the direct socket peer; never key security limits from raw X-Forwarded-For.
+    const peer = req.socket.remoteAddress ?? req.ip ?? "unknown";
+    const bucketKey = hash(`${bucket}|${peer}`);
+    const now = Math.floor(Date.now() / 1000);
+    const windowStarted = Math.floor(now / windowSeconds) * windowSeconds;
+    const row = db.prepare(
+      "INSERT INTO oauth_rate_limits(bucket_key,window_started,hits) VALUES(?,?,1) " +
+      "ON CONFLICT(bucket_key) DO UPDATE SET " +
+      "hits=CASE WHEN oauth_rate_limits.window_started=excluded.window_started THEN oauth_rate_limits.hits+1 ELSE 1 END, " +
+      "window_started=excluded.window_started RETURNING hits"
+    ).get(bucketKey, windowStarted) as { hits: number };
+    if (row.hits > limit) {
+      const retryAfter = Math.max(1, windowStarted + windowSeconds - now);
+      res.setHeader("Retry-After", String(retryAfter));
+      res.setHeader("Cache-Control", "no-store");
+      res.status(429).json({ error: "rate_limited", error_description: "Too many requests; retry later" });
+      return;
+    }
+    // Bound stale limiter state without a timer or unbounded per-request scan.
+    if (now % 300 < 5) {
+      db.prepare("DELETE FROM oauth_rate_limits WHERE window_started < ?").run(now - 24 * 60 * 60);
+    }
+    next();
+  };
+}
+
 function cleanExpired(): void {
   const now = Math.floor(Date.now() / 1000);
   db.prepare("DELETE FROM sessions WHERE expires_at < ?").run(now);
@@ -165,8 +208,10 @@ function consumeAuthorizationTransaction(token: string): URLSearchParams | null 
 
 function isSameOriginFormPost(req: Request): boolean {
   if (req.header("sec-fetch-site") === "cross-site") return false;
+  // Browser form POSTs include Origin. Reject absent Origin rather than
+  // treating an unverifiable request as same-origin.
   const origin = req.header("origin");
-  if (!origin) return true;
+  if (!origin) return false;
   try {
     return new URL(origin).origin === new URL(ISSUER).origin;
   } catch {
@@ -222,13 +267,13 @@ export async function createLocalOAuthRouter() {
     token_endpoint_auth_methods_supported: ["none"],
     client_id_metadata_document_supported: false,
     scopes_supported: [SCOPE],
-    authorization_response_iss_parameter_supported: true,
+    authorization_response_iss_parameter_supported: false,
   };
 
   router.get("/.well-known/oauth-authorization-server", (_req, res) => res.json(authMetadata));
   router.get("/oauth/jwks.json", (_req, res) => res.json(jwks));
 
-  router.post("/oauth/register", async (req, res) => {
+  router.post("/oauth/register", rateLimit("dcr", configuredLimit("MCP_OAUTH_DCR_LIMIT", 20), 3600), async (req, res) => {
     const redirects = req.body?.redirect_uris;
     const grants = req.body?.grant_types ?? ["authorization_code", "refresh_token"];
     const methods = req.body?.token_endpoint_auth_method ? [req.body.token_endpoint_auth_method] : ["none"];
@@ -251,7 +296,7 @@ export async function createLocalOAuthRouter() {
     });
   });
 
-  router.get("/oauth/authorize", async (req, res) => {
+  router.get("/oauth/authorize", rateLimit("authorize", configuredLimit("MCP_OAUTH_AUTHORIZE_LIMIT", 120), 900), async (req, res) => {
     const p = requestParams(req);
     const validation = await validateAuthorizationRequest(p);
     if (!validation.ok) return sendError(res, validation.status, validation.error, validation.description);
@@ -334,7 +379,7 @@ export async function createLocalOAuthRouter() {
     res.redirect(303, target.toString());
   });
 
-  router.post("/oauth/token", async (req, res) => {
+  router.post("/oauth/token", rateLimit("token", configuredLimit("MCP_OAUTH_TOKEN_LIMIT", 60), 60), async (req, res) => {
     const grant = String(req.body?.grant_type ?? "");
     const clientId = String(req.body?.client_id ?? "");
     const client = await resolveClient(clientId).catch(() => null);
@@ -343,17 +388,18 @@ export async function createLocalOAuthRouter() {
       const code = String(req.body?.code ?? "");
       const redirectUri = String(req.body?.redirect_uri ?? "");
       const verifier = String(req.body?.code_verifier ?? "");
-      const row = db.prepare("SELECT * FROM auth_codes WHERE code_hash=?").get(hash(code)) as
+      if (!/^[A-Za-z0-9._~-]{43,128}$/.test(verifier)) return sendError(res, 400, "invalid_grant");
+      const now = Math.floor(Date.now() / 1000);
+      // Consume only when every binding, including PKCE, matches. A bad verifier
+      // must not burn a valid code, while concurrent exchanges remain atomic.
+      const row = db.prepare("DELETE FROM auth_codes WHERE code_hash=? AND client_id=? AND redirect_uri=? AND resource=? AND challenge=? AND expires_at>=? RETURNING client_id,user_id,redirect_uri,challenge,resource,scope,expires_at")
+        .get(hash(code), clientId, redirectUri, String(req.body?.resource ?? ""), pkceS256(verifier), now) as
         { client_id: string; user_id: string; redirect_uri: string; challenge: string; resource: string; scope: string; expires_at: number } | undefined;
-      if (!row || row.expires_at < Math.floor(Date.now() / 1000) || row.client_id !== clientId
-          || row.redirect_uri !== redirectUri || row.resource !== String(req.body?.resource ?? "")
-          || !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier)) return sendError(res, 400, "invalid_grant");
-      if (!verifyPkceS256(verifier, row.challenge)) return sendError(res, 400, "invalid_grant");
-      db.prepare("DELETE FROM auth_codes WHERE code_hash=?").run(hash(code));
+      if (!row) return sendError(res, 400, "invalid_grant");
       const access = await new SignJWT({ scope: row.scope })
         .setProtectedHeader({ alg: "RS256", kid: publicJwk.kid as string, typ: "at+jwt" })
         .setIssuer(ISSUER).setSubject(row.user_id).setAudience(row.resource)
-        .setIssuedAt().setExpirationTime(ACCESS_TTL).setJti(randomToken(16)).sign(signingKey);
+        .setIssuedAt().setExpirationTime(`${ACCESS_TTL}s`).setJti(randomToken(16)).sign(signingKey);
       const refresh = randomToken();
       db.prepare("INSERT INTO refresh_tokens(token_hash,family_id,client_id,user_id,resource,scope,expires_at) VALUES(?,?,?,?,?,?,?)")
         .run(hash(refresh), randomToken(16), clientId, row.user_id, row.resource, row.scope, Math.floor(Date.now() / 1000) + REFRESH_TTL);
@@ -363,20 +409,26 @@ export async function createLocalOAuthRouter() {
     }
     if (grant === "refresh_token") {
       const token = String(req.body?.refresh_token ?? "");
-      const row = db.prepare("SELECT * FROM refresh_tokens WHERE token_hash=?").get(hash(token)) as
-        { family_id: string; client_id: string; user_id: string; resource: string; scope: string; expires_at: number; used_at: number | null } | undefined;
-      if (!row || row.client_id !== clientId || row.expires_at < Math.floor(Date.now() / 1000) || row.used_at) {
-        if (row?.family_id) db.prepare("DELETE FROM refresh_tokens WHERE family_id=?").run(row.family_id);
+      const tokenHash = hash(token);
+      const now = Math.floor(Date.now() / 1000);
+      const row = db.prepare("UPDATE refresh_tokens SET used_at=? WHERE token_hash=? AND client_id=? AND expires_at>=? AND used_at IS NULL RETURNING family_id,client_id,user_id,resource,scope,expires_at")
+        .get(now, tokenHash, clientId, now) as
+        { family_id: string; client_id: string; user_id: string; resource: string; scope: string; expires_at: number } | undefined;
+      if (!row) {
+        const reused = db.prepare("SELECT family_id,client_id FROM refresh_tokens WHERE token_hash=?").get(tokenHash) as
+          { family_id: string; client_id: string } | undefined;
+        if (reused?.family_id && reused.client_id === clientId) {
+          db.prepare("DELETE FROM refresh_tokens WHERE family_id=?").run(reused.family_id);
+        }
         return sendError(res, 400, "invalid_grant");
       }
-      db.prepare("UPDATE refresh_tokens SET used_at=? WHERE token_hash=?").run(Math.floor(Date.now() / 1000), hash(token));
       const next = randomToken();
       db.prepare("INSERT INTO refresh_tokens(token_hash,family_id,client_id,user_id,resource,scope,expires_at) VALUES(?,?,?,?,?,?,?)")
         .run(hash(next), row.family_id, clientId, row.user_id, row.resource, row.scope, Math.floor(Date.now() / 1000) + REFRESH_TTL);
       const access = await new SignJWT({ scope: row.scope })
         .setProtectedHeader({ alg: "RS256", kid: publicJwk.kid as string, typ: "at+jwt" })
         .setIssuer(ISSUER).setSubject(row.user_id).setAudience(row.resource)
-        .setIssuedAt().setExpirationTime(ACCESS_TTL).setJti(randomToken(16)).sign(signingKey);
+        .setIssuedAt().setExpirationTime(`${ACCESS_TTL}s`).setJti(randomToken(16)).sign(signingKey);
       res.setHeader("Cache-Control", "no-store");
       res.json({ access_token: access, token_type: "Bearer", expires_in: ACCESS_TTL, refresh_token: next, scope: row.scope });
       return;
@@ -384,13 +436,14 @@ export async function createLocalOAuthRouter() {
     sendError(res, 400, "unsupported_grant_type");
   });
 
-  router.post("/oauth/revoke", (req, res) => {
+  router.post("/oauth/revoke", rateLimit("revoke", configuredLimit("MCP_OAUTH_REVOKE_LIMIT", 30), 60), (req, res) => {
     const token = String(req.body?.token ?? "");
     db.prepare("DELETE FROM refresh_tokens WHERE token_hash=?").run(hash(token));
     res.status(200).end();
   });
 
   router.post("/oauth/logout", (req, res) => {
+    if (!isSameOriginFormPost(req)) return sendError(res, 403, "access_denied", "Cross-origin form submission rejected");
     const cookie = req.header("cookie") ?? "";
     const raw = cookie.split(";").map((x) => x.trim()).find((x) => x.startsWith("mcp_session="))?.slice(12);
     if (raw) db.prepare("DELETE FROM sessions WHERE token_hash=?").run(hash(decodeURIComponent(raw)));
