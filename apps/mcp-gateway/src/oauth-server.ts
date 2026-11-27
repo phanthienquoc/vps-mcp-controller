@@ -63,6 +63,35 @@ function safeEqual(a: string, b: string): boolean {
   const bb = Buffer.from(b);
   return aa.length === bb.length && timingSafeEqual(aa, bb);
 }
+function rateLimit(bucket: string, limit: number, windowSeconds: number) {
+  return (req: Request, res: Response, next: (error?: unknown) => void): void => {
+    // Express trust proxy remains disabled by default. req.ip therefore comes
+    // from the direct socket peer; never key security limits from raw X-Forwarded-For.
+    const peer = req.socket.remoteAddress ?? req.ip ?? "unknown";
+    const bucketKey = hash(`${bucket}|${peer}`);
+    const now = Math.floor(Date.now() / 1000);
+    const windowStarted = Math.floor(now / windowSeconds) * windowSeconds;
+    const row = db.prepare(
+      "INSERT INTO oauth_rate_limits(bucket_key,window_started,hits) VALUES(?,?,1) " +
+      "ON CONFLICT(bucket_key) DO UPDATE SET " +
+      "hits=CASE WHEN oauth_rate_limits.window_started=excluded.window_started THEN oauth_rate_limits.hits+1 ELSE 1 END, " +
+      "window_started=excluded.window_started RETURNING hits"
+    ).get(bucketKey, windowStarted) as { hits: number };
+    if (row.hits > limit) {
+      const retryAfter = Math.max(1, windowStarted + windowSeconds - now);
+      res.setHeader("Retry-After", String(retryAfter));
+      res.setHeader("Cache-Control", "no-store");
+      res.status(429).json({ error: "rate_limited", error_description: "Too many requests; retry later" });
+      return;
+    }
+    // Bound stale limiter state without a timer or unbounded per-request scan.
+    if (now % 300 === 0) {
+      db.prepare("DELETE FROM oauth_rate_limits WHERE window_started < ?").run(now - 24 * 60 * 60);
+    }
+    next();
+  };
+}
+
 function cleanExpired(): void {
   const now = Math.floor(Date.now() / 1000);
   db.prepare("DELETE FROM sessions WHERE expires_at < ?").run(now);
@@ -230,7 +259,7 @@ export async function createLocalOAuthRouter() {
   router.get("/.well-known/oauth-authorization-server", (_req, res) => res.json(authMetadata));
   router.get("/oauth/jwks.json", (_req, res) => res.json(jwks));
 
-  router.post("/oauth/register", async (req, res) => {
+  router.post("/oauth/register", rateLimit("dcr", Number(process.env.MCP_OAUTH_DCR_LIMIT ?? 20), 3600), async (req, res) => {
     const redirects = req.body?.redirect_uris;
     const grants = req.body?.grant_types ?? ["authorization_code", "refresh_token"];
     const methods = req.body?.token_endpoint_auth_method ? [req.body.token_endpoint_auth_method] : ["none"];
@@ -253,7 +282,7 @@ export async function createLocalOAuthRouter() {
     });
   });
 
-  router.get("/oauth/authorize", async (req, res) => {
+  router.get("/oauth/authorize", rateLimit("authorize", Number(process.env.MCP_OAUTH_AUTHORIZE_LIMIT ?? 120), 900), async (req, res) => {
     const p = requestParams(req);
     const validation = await validateAuthorizationRequest(p);
     if (!validation.ok) return sendError(res, validation.status, validation.error, validation.description);
@@ -336,7 +365,7 @@ export async function createLocalOAuthRouter() {
     res.redirect(303, target.toString());
   });
 
-  router.post("/oauth/token", async (req, res) => {
+  router.post("/oauth/token", rateLimit("token", Number(process.env.MCP_OAUTH_TOKEN_LIMIT ?? 60), 60), async (req, res) => {
     const grant = String(req.body?.grant_type ?? "");
     const clientId = String(req.body?.client_id ?? "");
     const client = await resolveClient(clientId).catch(() => null);
@@ -393,7 +422,7 @@ export async function createLocalOAuthRouter() {
     sendError(res, 400, "unsupported_grant_type");
   });
 
-  router.post("/oauth/revoke", (req, res) => {
+  router.post("/oauth/revoke", rateLimit("revoke", Number(process.env.MCP_OAUTH_REVOKE_LIMIT ?? 30), 60), (req, res) => {
     const token = String(req.body?.token ?? "");
     db.prepare("DELETE FROM refresh_tokens WHERE token_hash=?").run(hash(token));
     res.status(200).end();
