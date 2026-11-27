@@ -101,7 +101,12 @@ if has k3s; then
     k3s kubectl get ingressclass
   else warn "Cannot inspect IngressClass"; fi
   if k3s kubectl get namespace ops-prod >/dev/null 2>&1; then ok "Namespace ops-prod exists"; else warn "Namespace ops-prod missing; create it during deployment"; fi
-  if k3s kubectl -n ops-prod get secret mcp-mrcute-space-tls >/dev/null 2>&1; then ok "TLS secret exists in ops-prod"; else warn "TLS secret mcp-mrcute-space-tls missing"; fi
+  if k3s kubectl -n ops-prod get secret mcp-mrcute-space-tls >/dev/null 2>&1; then
+    ok "TLS secret exists in ops-prod"
+  else
+    ISSUER_READY="$(k3s kubectl get clusterissuer letsencrypt-prod -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+    if [[ "$ISSUER_READY" == "True" ]]; then warn "TLS secret will be provisioned by the deployment Certificate manifest"; else warn "TLS secret missing and letsencrypt-prod ClusterIssuer is not Ready"; fi
+  fi
   if k3s kubectl -n ops-prod get secret vps-mcp-secrets >/dev/null 2>&1; then ok "Gateway secret exists"; else warn "Gateway secret vps-mcp-secrets missing"; fi
 else fail "k3s binary not found"; fi
 
