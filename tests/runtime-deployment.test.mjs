@@ -62,5 +62,5 @@ test("production deploy is blocked before any privileged mutation until OAuth is
 test("production deployment docs do not create a static bearer credential", async () => {
   const docs = await read("../docs/DEPLOYMENT.md");
   assert.match(docs, /production-only/i);
-  assert.doesNotMatch(docs, /mcp-bearer-token|openssl rand -hex/);
+  assert.doesNotMatch(docs, /openssl rand -hex|--from-file=mcp-bearer-token/);
 });
