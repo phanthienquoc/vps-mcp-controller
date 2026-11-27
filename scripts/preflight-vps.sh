@@ -16,6 +16,7 @@ REPO_DIR="/opt/vps-mcp-controller"
 CHECK_USER="${SUDO_USER:-$(id -un)}"
 RUNTIME_NODE="$REPO_DIR/runtime/node/bin/node"
 RUNTIME_NPM="$REPO_DIR/runtime/node/bin/npm"
+# host Node/npm not required: the Root Agent uses the checksum-verified isolated runtime.
 check_trusted_path() {
   local path="$1"
   if [[ ! -e "$path" || -L "$path" ]]; then fail "Trusted deployment path missing or symlinked: $path"; return; fi
@@ -80,7 +81,7 @@ if getent group vps-mcp >/dev/null 2>&1; then
 else warn "Socket group vps-mcp not installed yet"; fi
 
 GHCR_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 https://ghcr.io/v2/ 2>/dev/null || true)"
-case "$GHCR_STATUS" in 200|401) ok "GHCR registry reachable (HTTP $GHCR_STATUS)" ;; 403) warn "GHCR reachable but forbidden (HTTP 403)" ;; 000|"") warn "Cannot connect to GHCR" ;; *) warn "GHCR returned HTTP $GHCR_STATUS" ;; esac
+case "$GHCR_STATUS" in 200|401) ok "GHCR registry reachable (HTTP $GHCR_STATUS; authentication may be required)" ;; 403) warn "GHCR reachable but forbidden (HTTP 403)" ;; 000|"") warn "Cannot connect to GHCR" ;; *) warn "GHCR returned HTTP $GHCR_STATUS" ;; esac
 
 printf '\nNOTE: This is a read-only preflight only. OAuth 2.1/PKCE is not implemented; do not install or deploy the gateway.\n'
 printf 'Summary: %s PASS, %s WARN, %s FAIL\n' "$PASS" "$WARN" "$FAIL"
