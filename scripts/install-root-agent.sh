@@ -72,6 +72,8 @@ printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/vps-mcp-deploy *\n' "$DEPLOY_USE
 chmod 0440 "$SUDOERS_TMP"
 visudo -cf "$SUDOERS_TMP"
 if [[ -e "$SUDOERS_PATH" ]]; then
+  [[ ! -L "$SUDOERS_PATH" ]] || { echo "Refusing symlinked $SUDOERS_PATH" >&2; exit 1; }
+  [[ "$(stat -c '%U:%G:%a' "$SUDOERS_PATH")" == "root:root:440" ]] || { echo "Existing $SUDOERS_PATH must be root:root mode 0440" >&2; exit 1; }
   cmp -s "$SUDOERS_TMP" "$SUDOERS_PATH" || { echo "Existing $SUDOERS_PATH differs; review it manually" >&2; exit 1; }
 else
   install -o root -g root -m 0440 "$SUDOERS_TMP" "$SUDOERS_PATH"
