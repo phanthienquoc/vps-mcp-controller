@@ -7,7 +7,7 @@
 - Advertise RFC 8414 authorization-server metadata, RFC 9728 protected-resource metadata and DCR. CIMD is not advertised in this initial implementation.
 - Public OAuth clients use \`token_endpoint_auth_method=none\`; clients are bound to exact registered HTTPS redirect URIs.
 - Echo and validate the exact MCP \`resource\` value; access-token audience must equal \`https://mcp.mrcute.space/mcp\`.
-- Passwords are stored as scrypt hashes with per-user random salts. Login failures are throttled by IP/email.
+- Passwords are stored as scrypt hashes with per-user random salts. Login failures are throttled by direct-peer IP/email. Express proxy trust remains disabled; do not trust caller-supplied forwarding headers.
 - Sessions, one-time authorization codes, registered clients and refresh-token families are persisted in SQLite on a dedicated PVC. Keep exactly one gateway replica.
 - Access tokens are RS256 JWTs with five-minute expiry and the required \`mcp:tools\` scope. Private signing key is supplied only through Kubernetes Secret; public key is served through JWKS.
 - Refresh tokens are opaque, stored hashed, rotate on every use and revoke their family on reuse.
@@ -15,6 +15,8 @@
 - Authorization transactions are stored hashed, expire after ten minutes, and are atomically consumed once on successful login or consent. Consent revalidates client, exact redirect URI, response type, PKCE S256 challenge, resource and scope before issuing a code.
 - Login, consent and logout POSTs require an exact issuer-origin `Origin` header and reject cross-site Fetch Metadata; missing-Origin and cross-origin form submissions are tested. The transaction handle is an additional CSRF defense.
 - `authorization_response_iss_parameter_supported` is false because validation errors are not currently returned as OAuth redirects carrying `iss`; successful consent redirects do include `iss`.
+- DCR is limited to 20 requests per direct peer per hour; authorization to 120 per peer per 15 minutes; token to 60 per peer per minute; revocation to 30 per peer per minute. Limits use persistent SQLite fixed windows and return `429` with `Retry-After`.
+- Limits key on the direct socket peer, not `X-Forwarded-For`. Behind Traefik, callers may share one quota. Keep proxy trust disabled until the ingress proxy boundary and trusted address ranges are verified.
 - Revoking a refresh token does not invalidate an already-issued access JWT immediately; the remaining maximum exposure is five minutes.
 - Bootstrap account is created once from runtime Secret values. This initial version has no user management, password reset/change UI or MFA; keep access restricted to one administrator until those controls exist.
 - Never commit credentials, password hashes, signing keys or token material. Do not expose secrets in logs.
