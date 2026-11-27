@@ -40,6 +40,7 @@ test("journal line count is bounded", () => {
 
 test("deploy entrypoint requires a root-owned checkout and a commit reachable from origin/master", () => {
   assert.ok(deployScript.includes('REPO_DIR="/opt/vps-mcp-controller"'));
+  assert.ok(deployScript.includes("test -w /opt"));
   assert.ok(deployScript.includes("stat -c '%U:%G' \"$REPO_DIR\""));
   assert.ok(deployScript.includes('git -C "$REPO_DIR" fetch --no-tags --prune origin'));
   assert.ok(deployScript.includes('git -C "$REPO_DIR" merge-base --is-ancestor "$SHA" refs/remotes/origin/master'));
@@ -63,6 +64,7 @@ test("deploy workflow pins one SHA and streams GHCR credentials to the root entr
 
 test("privileged installers and preflight enforce root-owned deployment sources", () => {
   assert.ok(deployInstaller.includes('EXPECTED_REPO_DIR="/opt/vps-mcp-controller"'));
+  assert.ok(deployInstaller.includes("test -w /opt"));
   assert.ok(deployInstaller.includes('sudo -u "$DEPLOY_USER" test -w "$REPO_DIR"'));
   assert.ok(rootInstaller.includes('find "$INSTALL_DIR"'));
   assert.ok(preflightScript.includes("CHECK_USER="));
