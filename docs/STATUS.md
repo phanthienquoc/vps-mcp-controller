@@ -19,6 +19,7 @@ Updated: 2026-11-27
 - [x] Gateway image publication targets linux/amd64 and linux/arm64.
 - [x] Host Root Agent uses a checksum-verified Node 26 runtime isolated under the trusted checkout; no system-wide Node/npm is required.
 - [x] Preflight treats the expected unauthenticated GHCR HTTP 401 challenge as registry reachability.
+- [x] Deployment provisions the ingress TLS secret through cert-manager Certificate and waits for readiness.
 
 ## Hardening review and production gates
 
