@@ -16,13 +16,15 @@ Updated: 2026-11-27
 
 ## Not production-ready until verified
 
-- [ ] Node 26 CI: typecheck, build, unit tests and integration tests.
-- [ ] Add automated end-to-end PKCE/DCR/login/token/refresh/revocation tests.
-- [ ] Verify actual ChatGPT callback URI and DCR interoperability.
+- [x] Node 26 CI: typecheck, build, unit tests and integration tests (latest branch checks passed).
+- [x] Add automated end-to-end PKCE/DCR/login/token/refresh/revocation tests, including code/refresh replay races and missing-Origin CSRF cases.
+- [ ] Verify actual ChatGPT callback URI and DCR interoperability against the ChatGPT connector UI.
 - [ ] Add user password reset/change, multi-user administration and MFA before broader access.
-- [ ] Review CSRF, cookie, rate-limit, proxy/IP, SQLite backup/restore and key rotation behavior.
+- [x] Review CSRF Origin/Fetch Metadata checks; missing Origin is rejected and tested.
+- [ ] Add global rate limits for DCR/token/authorization endpoints; validate ingress proxy/IP behavior before relying on client IP throttling.
+- [ ] Review cookie policy, SQLite backup/restore and signing-key rotation behavior.
 - [ ] Verify persistent volume and secret provisioning on the target cluster.
-- [ ] Independent security review.
+- [ ] Independent security review; do not treat automated tests as a substitute.
 
 ## Safety boundaries
 
