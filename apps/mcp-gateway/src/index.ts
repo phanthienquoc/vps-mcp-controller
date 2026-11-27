@@ -11,7 +11,7 @@ const publicHost = process.env.MCP_ALLOWED_HOST ?? "mcp.mrcute.space";
 const resourcePath = "/.well-known/oauth-protected-resource";
 
 function audit(e: Record<string, unknown>): void {
-  process.stdout.write(JSON.stringify({ ts: new Date().toISOString(), component: "mcp-gateway", ...e }) + "\\n");
+  process.stdout.write(JSON.stringify({ ts: new Date().toISOString(), component: "mcp-gateway", ...e }) + "\n");
 }
 
 const oauth = await loadOAuthConfig();
