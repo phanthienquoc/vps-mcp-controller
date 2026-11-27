@@ -83,6 +83,12 @@ if ! systemctl is-active --quiet vps-root-agent; then
   echo "vps-root-agent is not active; refusing deployment" >&2
   exit 1
 fi
+
+TARGET_NODE_READY="$("${KUBECTL[@]}" get node tce-k3s-01 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+if [[ "$TARGET_NODE_READY" != "True" ]]; then
+  echo "Expected Kubernetes node tce-k3s-01 is not Ready; refusing deployment" >&2
+  exit 1
+fi
 if [[ ! -S /run/vps-mcp/root-agent.sock ]]; then
   echo "Root Agent socket is missing" >&2
   exit 1
