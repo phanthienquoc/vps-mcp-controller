@@ -1,4 +1,5 @@
 import { randomBytes, createHash, scryptSync, timingSafeEqual, createPublicKey } from "node:crypto";
+import { isAllowedRedirectUri, verifyPkceS256 } from "./oauth-helpers.js";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -102,14 +103,7 @@ function readClient(clientId: string): { redirect_uris: string[]; token_auth_met
   if (row) return { redirect_uris: JSON.parse(row.redirect_uris), token_auth_method: row.token_auth_method };
   return null;
 }
-function validRedirect(uri: string): boolean {
-  try {
-    const u = new URL(uri);
-    if (u.protocol !== "https:") return false;
-    if (u.username || u.password || u.hash) return false;
-    return true;
-  } catch { return false; }
-}
+
 async function resolveClient(clientId: string): Promise<{ redirect_uris: string[]; token_auth_method: string } | null> {
   const registered = readClient(clientId);
   if (registered) return registered;
@@ -120,7 +114,7 @@ async function resolveClient(clientId: string): Promise<{ redirect_uris: string[
   const response = await fetch(u, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(5000), redirect: "error" });
   if (!response.ok) return null;
   const doc = await response.json() as { client_id?: string; redirect_uris?: unknown; token_endpoint_auth_methods_supported?: unknown };
-  if (doc.client_id !== clientId || !Array.isArray(doc.redirect_uris) || !doc.redirect_uris.every((v) => typeof v === "string" && validRedirect(v))) return null;
+  if (doc.client_id !== clientId || !Array.isArray(doc.redirect_uris) || !doc.redirect_uris.every((v) => typeof v === "string" && isAllowedRedirectUri(v))) return null;
   const methods = doc.token_endpoint_auth_methods_supported;
   if (!Array.isArray(methods) || !methods.includes("none")) return null;
   return { redirect_uris: doc.redirect_uris as string[], token_auth_method: "none" };
@@ -278,8 +272,7 @@ export async function createLocalOAuthRouter() {
       if (!row || row.expires_at < Math.floor(Date.now() / 1000) || row.client_id !== clientId
           || row.redirect_uri !== redirectUri || row.resource !== String(req.body?.resource ?? "")
           || !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier)) return sendError(res, 400, "invalid_grant");
-      const challenge = createHash("sha256").update(verifier).digest("base64url");
-      if (!safeEqual(challenge, row.challenge)) return sendError(res, 400, "invalid_grant");
+      if (!verifyPkceS256(verifier, row.challenge)) return sendError(res, 400, "invalid_grant");
       db.prepare("DELETE FROM auth_codes WHERE code_hash=?").run(hash(code));
       const access = await new SignJWT({ scope: row.scope })
         .setProtectedHeader({ alg: "RS256", kid: publicJwk.kid as string, typ: "at+jwt" })
