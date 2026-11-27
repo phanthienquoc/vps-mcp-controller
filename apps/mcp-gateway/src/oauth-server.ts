@@ -343,13 +343,13 @@ export async function createLocalOAuthRouter() {
       const code = String(req.body?.code ?? "");
       const redirectUri = String(req.body?.redirect_uri ?? "");
       const verifier = String(req.body?.code_verifier ?? "");
-      const row = db.prepare("SELECT * FROM auth_codes WHERE code_hash=?").get(hash(code)) as
+      const row = db.prepare("DELETE FROM auth_codes WHERE code_hash=? RETURNING client_id,user_id,redirect_uri,challenge,resource,scope,expires_at")
+        .get(hash(code)) as
         { client_id: string; user_id: string; redirect_uri: string; challenge: string; resource: string; scope: string; expires_at: number } | undefined;
       if (!row || row.expires_at < Math.floor(Date.now() / 1000) || row.client_id !== clientId
           || row.redirect_uri !== redirectUri || row.resource !== String(req.body?.resource ?? "")
           || !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier)) return sendError(res, 400, "invalid_grant");
       if (!verifyPkceS256(verifier, row.challenge)) return sendError(res, 400, "invalid_grant");
-      db.prepare("DELETE FROM auth_codes WHERE code_hash=?").run(hash(code));
       const access = await new SignJWT({ scope: row.scope })
         .setProtectedHeader({ alg: "RS256", kid: publicJwk.kid as string, typ: "at+jwt" })
         .setIssuer(ISSUER).setSubject(row.user_id).setAudience(row.resource)
@@ -363,13 +363,19 @@ export async function createLocalOAuthRouter() {
     }
     if (grant === "refresh_token") {
       const token = String(req.body?.refresh_token ?? "");
-      const row = db.prepare("SELECT * FROM refresh_tokens WHERE token_hash=?").get(hash(token)) as
-        { family_id: string; client_id: string; user_id: string; resource: string; scope: string; expires_at: number; used_at: number | null } | undefined;
-      if (!row || row.client_id !== clientId || row.expires_at < Math.floor(Date.now() / 1000) || row.used_at) {
-        if (row?.family_id) db.prepare("DELETE FROM refresh_tokens WHERE family_id=?").run(row.family_id);
+      const tokenHash = hash(token);
+      const now = Math.floor(Date.now() / 1000);
+      const row = db.prepare("UPDATE refresh_tokens SET used_at=? WHERE token_hash=? AND client_id=? AND expires_at>=? AND used_at IS NULL RETURNING family_id,client_id,user_id,resource,scope,expires_at")
+        .get(now, tokenHash, clientId, now) as
+        { family_id: string; client_id: string; user_id: string; resource: string; scope: string; expires_at: number } | undefined;
+      if (!row) {
+        const reused = db.prepare("SELECT family_id,client_id FROM refresh_tokens WHERE token_hash=?").get(tokenHash) as
+          { family_id: string; client_id: string } | undefined;
+        if (reused?.family_id && reused.client_id === clientId) {
+          db.prepare("DELETE FROM refresh_tokens WHERE family_id=?").run(reused.family_id);
+        }
         return sendError(res, 400, "invalid_grant");
       }
-      db.prepare("UPDATE refresh_tokens SET used_at=? WHERE token_hash=?").run(Math.floor(Date.now() / 1000), hash(token));
       const next = randomToken();
       db.prepare("INSERT INTO refresh_tokens(token_hash,family_id,client_id,user_id,resource,scope,expires_at) VALUES(?,?,?,?,?,?,?)")
         .run(hash(next), row.family_id, clientId, row.user_id, row.resource, row.scope, Math.floor(Date.now() / 1000) + REFRESH_TTL);
