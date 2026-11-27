@@ -26,7 +26,7 @@ if find "$INSTALL_DIR" -xdev \( -type d -o -type f \) \( ! -user root -o -perm /
   exit 1
 fi
 if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]] \
-  && sudo -u "$SUDO_USER" test -w "$INSTALL_DIR"; then
+  && { sudo -u "$SUDO_USER" test -w /opt || sudo -u "$SUDO_USER" test -w "$INSTALL_DIR"; }; then
   echo "The invoking SSH user must not be able to write the trusted checkout" >&2
   exit 1
 fi
