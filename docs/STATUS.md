@@ -1,8 +1,8 @@
 # Implementation status
 
-Updated: 2026-11-26
+Updated: 2026-11-27
 
-## Implemented in feat/vps-mcp-controller
+## Implemented
 
 - [x] Repository bootstrap and dedicated feature branch.
 - [x] Architecture, security, development, deployment and operations docs.
@@ -12,20 +12,25 @@ Updated: 2026-11-26
 - [x] k3s deployment/service/ingress templates and host systemd unit.
 - [x] CI and GHCR image-publish workflow.
 - [x] Contract tests for namespace mutation boundary, systemd restart scope and bounded journal output.
-- [x] GitHub Actions CI install, typecheck and build succeeded at commit f2c261a4ee57bc0a0c416a75c51efc4cf294d54d.
+- [x] Read-only VPS preflight.
+- [x] Root-owned deployment checkout and installer ownership/write-access guards (hardening PR branch).
+- [x] Root deploy entrypoint verifies immutable commit SHA reachability from origin/master and applies only manifests archived from that verified commit (hardening PR branch).
+- [x] GHCR imagePullSecret creation uses a mode-0600 temporary Docker config; token is streamed on stdin and is not passed in process arguments (hardening PR branch).
+- [x] CI contract assertions cover trusted checkout, immutable SHA and secret handling (hardening PR branch).
 
-## Remaining code and production gates
+## Hardening review and production gates
 
-- [ ] Run CI including the newly added contract test suite and fix any failures.
+- [ ] Required CI checks pass and hardening PR is squash-merged.
+- [ ] User runs the read-only VPS preflight after merge and reviews all output.
+- [ ] Test Root Agent in an isolated Linux VM.
+- [ ] Verify Node.js 26, DNS, IngressClass, TLS secret, GHCR permissions and available disk on the actual VPS.
+- [ ] Install host Root Agent only after preflight review and explicit authorization.
+- [ ] Deploy gateway only after separate explicit authorization and verify all tools.
+- [ ] Prove recovery/rollback behavior.
 - [ ] Implement standards-compliant OAuth 2.1 / PKCE and protected-resource metadata for ChatGPT custom MCP.
 - [ ] Implement GitHub Actions adapter with repo allowlist and least-privilege token.
 - [ ] Implement Supabase read-only diagnostics adapter.
 - [ ] Add durable audit storage, retention and alerts.
-- [ ] Test Root Agent in isolated Linux VM.
-- [ ] Verify Node.js 26, DNS, IngressClass, TLS secret, GHCR permissions and available disk on actual VPS.
-- [ ] Install host Root Agent and prove UDS permissions from the gateway pod.
-- [ ] Deploy gateway and smoke-test every tool.
-- [ ] Prove recovery/rollback behavior.
 
 ## Safety boundaries
 
@@ -35,4 +40,4 @@ Updated: 2026-11-26
 - Autonomous rollout restart is limited to ops-prod and tce-prod.
 - stock-prod and media-prod are read-only for this controller until separate review.
 
-No VPS command has been executed and no Kubernetes manifest has been applied by repository setup. Production completion must not be claimed until the gates above have evidence.
+No VPS command has been executed and no Kubernetes manifest has been applied by repository setup or this hardening change. Production completion must not be claimed until the gates above have evidence.
