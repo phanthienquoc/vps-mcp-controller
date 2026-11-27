@@ -4,19 +4,18 @@ set -uo pipefail
 PASS=0
 WARN=0
 FAIL=0
-ok(){ printf 'PASS  %s\n' "$1"; PASS=$((PASS+1)); }
-warn(){ printf 'WARN  %s\n' "$1"; WARN=$((WARN+1)); }
-fail(){ printf 'FAIL  %s\n' "$1"; FAIL=$((FAIL+1)); }
+ok(){ printf 'PASS  %s\\n' "$1"; PASS=$((PASS+1)); }
+warn(){ printf 'WARN  %s\\n' "$1"; WARN=$((WARN+1)); }
+fail(){ printf 'FAIL  %s\\n' "$1"; FAIL=$((FAIL+1)); }
 has(){ command -v "$1" >/dev/null 2>&1; }
 
-printf 'VPS MCP Controller production preflight (read-only)\n'
-printf 'Host: %s | User: %s | Architecture: %s\n\n' "$(hostname)" "$(id -un)" "$(uname -m)"
+printf 'VPS MCP Controller production preflight (read-only)\\n'
+printf 'Host: %s | User: %s | Architecture: %s\\n\\n' "$(hostname)" "$(id -un)" "$(uname -m)"
 
 REPO_DIR="/opt/vps-mcp-controller"
 CHECK_USER="${SUDO_USER:-$(id -un)}"
 RUNTIME_NODE="$REPO_DIR/runtime/node/bin/node"
 RUNTIME_NPM="$REPO_DIR/runtime/node/bin/npm"
-# host Node/npm not required: the Root Agent uses the checksum-verified isolated runtime.
 check_trusted_path() {
   local path="$1"
   if [[ ! -e "$path" || -L "$path" ]]; then fail "Trusted deployment path missing or symlinked: $path"; return; fi
@@ -59,11 +58,31 @@ if has k3s; then
   ok "k3s binary found: $(command -v k3s)"
   if k3s kubectl get nodes -o wide >/dev/null 2>&1; then ok "k3s API reachable"; k3s kubectl get nodes -o wide; else fail "Cannot query k3s nodes; check sudo/kubeconfig"; fi
   if k3s kubectl get ingressclass >/dev/null 2>&1; then ok "IngressClass inventory:"; k3s kubectl get ingressclass; else warn "Cannot inspect IngressClass"; fi
-  if k3s kubectl get namespace ops-prod >/dev/null 2>&1; then ok "Production namespace ops-prod exists"; else warn "Production namespace ops-prod missing"; fi
-  if k3s kubectl -n ops-prod get secret mcp-mrcute-space-tls >/dev/null 2>&1; then ok "Production TLS secret exists"; else warn "Production TLS secret missing; no resources will be created by this preflight"; fi
+  if k3s kubectl get namespace ops-prod >/dev/null 2>&1; then
+    ok "Production namespace ops-prod exists"
+    if k3s kubectl -n ops-prod get secret mcp-mrcute-space-tls >/dev/null 2>&1; then ok "Production TLS secret exists"; else warn "Production TLS secret missing; deploy entrypoint provisions it"; fi
+
+    OAUTH_KEYS="$(k3s kubectl -n ops-prod get secret mcp-oauth-secrets -o go-template='{{range $k,$v := .data}}{{printf "%s\\n" $k}}{{end}}' 2>/dev/null || true)"
+    if [[ -n "$OAUTH_KEYS" ]]; then
+      MISSING=()
+      for key in MCP_BOOTSTRAP_EMAIL MCP_BOOTSTRAP_PASSWORD MCP_OAUTH_SIGNING_PRIVATE_KEY MCP_OAUTH_SIGNING_KID; do
+        grep -Fxq "$key" <<<"$OAUTH_KEYS" || MISSING+=("$key")
+      done
+      if [[ "${#MISSING[@]}" -eq 0 ]]; then ok "OAuth Secret exists with all required keys (values not displayed)"; else warn "OAuth Secret is missing keys: ${MISSING[*]}"; fi
+    else warn "Required OAuth Secret mcp-oauth-secrets is missing"; fi
+
+    if k3s kubectl -n ops-prod get pvc mcp-auth-data >/dev/null 2>&1; then
+      PVC_PHASE="$(k3s kubectl -n ops-prod get pvc mcp-auth-data -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+      case "$PVC_PHASE" in
+        Bound) ok "OAuth database PVC mcp-auth-data is Bound" ;;
+        Pending) warn "OAuth database PVC mcp-auth-data is Pending (WaitForFirstConsumer may be normal before Gateway pod creation)" ;;
+        *) warn "OAuth database PVC mcp-auth-data phase: ${PVC_PHASE:-unknown}" ;;
+      esac
+    else warn "OAuth database PVC mcp-auth-data is not created yet"; fi
+  else warn "Production namespace ops-prod missing"; fi
+
   ISSUER_READY="$(k3s kubectl get clusterissuer letsencrypt-prod -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
   if [[ "$ISSUER_READY" == "True" ]]; then ok "letsencrypt-prod ClusterIssuer Ready"; else warn "letsencrypt-prod ClusterIssuer is not Ready"; fi
-  if k3s kubectl -n ops-prod get secret vps-mcp-secrets >/dev/null 2>&1; then warn "Legacy static bearer secret exists; do not use it for production ChatGPT auth"; else ok "No legacy static bearer secret found"; fi
 else fail "k3s binary not found"; fi
 
 for target in / /var/lib/rancher/k3s; do
@@ -80,10 +99,16 @@ if getent group vps-mcp >/dev/null 2>&1; then
   if [[ "$GROUP_GID" == "34001" ]]; then ok "Socket group vps-mcp has GID 34001"; else fail "vps-mcp group GID is $GROUP_GID, expected 34001"; fi
 else warn "Socket group vps-mcp not installed yet"; fi
 
+if systemctl is-active --quiet vps-root-agent; then
+  if [[ -S /run/vps-mcp/root-agent.sock ]]; then
+    if [[ "$(stat -c '%g' /run/vps-mcp/root-agent.sock)" == "34001" ]]; then ok "Root Agent active and socket group is GID 34001"; else fail "Root Agent socket group must be GID 34001"; fi
+  else warn "Root Agent service is active but its Unix socket is missing"; fi
+else warn "Root Agent service is not active"; fi
+
 GHCR_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 https://ghcr.io/v2/ 2>/dev/null || true)"
 case "$GHCR_STATUS" in 200|401) ok "GHCR registry reachable (HTTP $GHCR_STATUS; authentication may be required)" ;; 403) warn "GHCR reachable but forbidden (HTTP 403)" ;; 000|"") warn "Cannot connect to GHCR" ;; *) warn "GHCR returned HTTP $GHCR_STATUS" ;; esac
 
-printf '\nNOTE: This is a read-only preflight only. OAuth 2.1/PKCE is not implemented; do not install or deploy the gateway.\n'
+printf '\nNOTE: OAuth 2.1/PKCE code is present. This read-only preflight does not verify OAuth security or ChatGPT end-to-end interoperability; complete the documented review before production deployment.\n'
 printf 'Summary: %s PASS, %s WARN, %s FAIL\n' "$PASS" "$WARN" "$FAIL"
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
 exit 0
