@@ -27,7 +27,7 @@ export function loadOAuthConfig(): OAuthConfig {
   for (const [name, value] of [["MCP_OAUTH_ISSUER", issuer], ["MCP_RESOURCE_URL", resource]] as const) {
     const url = new URL(value);
     if (url.protocol !== "https:" || url.username || url.password || url.hash) {
-      throw new Error(\`\${name} must be an HTTPS URL without credentials or fragment\`);
+      throw new Error(`${name} must be an HTTPS URL without credentials or fragment`);
     }
   }
   const requiredScopes = ["mcp:tools"];
@@ -41,8 +41,8 @@ export function loadOAuthConfig(): OAuthConfig {
 }
 
 export function createOAuthMiddleware(config: OAuthConfig): RequestHandler {
-  const metadataUri = \`\${config.resource.replace(/\/mcp$/, "")}/.well-known/oauth-protected-resource\`;
-  const challenge = \`Bearer resource_metadata="\${metadataUri}", scope="\${config.requiredScopes.join(" ")}"\`;
+  const metadataUri = `${config.resource.replace(/\/mcp$/, "")}/.well-known/oauth-protected-resource`;
+  const challenge = `Bearer resource_metadata="${metadataUri}", scope="${config.requiredScopes.join(" ")}"`;
   return async (req, res, next) => {
     const token = readBearerToken(req.header("authorization"));
     if (!token) {
@@ -67,7 +67,7 @@ export function createOAuthMiddleware(config: OAuthConfig): RequestHandler {
       res.locals.oauth = { subject: payload.sub, scopes: config.requiredScopes };
       next();
     } catch {
-      res.setHeader("WWW-Authenticate", \`Bearer error="invalid_token", \${challenge.slice(7)}\`);
+      res.setHeader("WWW-Authenticate", `Bearer error="invalid_token", ${challenge.slice(7)}`);
       res.status(401).json({ error: "invalid_token" });
     }
   };
