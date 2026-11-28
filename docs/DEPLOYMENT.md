@@ -113,7 +113,7 @@ Required Environment variables:
 - `MCP_OAUTH_PRODUCTION_READY=true` is reserved for a later fully reviewed production release; do not set it for the bootstrap.
 - `VPS_TARGET_ID=tce-k3s-01`, `VPS_HOST`, `VPS_USER` (non-root), and `VPS_SSH_PORT=22`.
 
-Required Environment secrets: `VPS_SSH_PRIVATE_KEY`, `VPS_KNOWN_HOSTS`, and read-only `GHCR_READ_TOKEN`. The workflow requires successful CI for the exact immutable master SHA, strict host-key verification and a read-only VPS preflight before image publication. The root-owned entrypoint independently verifies the requested SHA is reachable from `origin/master` and applies manifests archived from that trusted checkout.
+Required Environment secrets: `VPS_SSH_PRIVATE_KEY`, `VPS_KNOWN_HOSTS`, and read-only `GHCR_READ_TOKEN`. The workflow requires successful CI for the exact immutable master SHA, SSH with `-o StrictHostKeyChecking=yes` and the pinned `VPS_KNOWN_HOSTS` file, plus a read-only VPS preflight before image publication. The root-owned entrypoint independently verifies the requested SHA is reachable from `origin/master` and applies manifests archived from that trusted checkout.
 
 ## Host bootstrap sequence
 
