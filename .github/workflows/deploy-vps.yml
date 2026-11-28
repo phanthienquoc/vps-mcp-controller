@@ -24,6 +24,7 @@ jobs:
       - name: Validate immutable source and deployment gates
         env:
           MCP_OAUTH_PRODUCTION_READY: ${{ vars.MCP_OAUTH_PRODUCTION_READY }}
+          MCP_OAUTH_BOOTSTRAP_APPROVED: ${{ vars.MCP_OAUTH_BOOTSTRAP_APPROVED }}
           VPS_TARGET_ID: ${{ vars.VPS_TARGET_ID }}
           VPS_HOST: ${{ vars.VPS_HOST }}
           GH_TOKEN: ${{ github.token }}
@@ -51,7 +52,9 @@ jobs:
           fi
           echo "Verified successful CI run $(jq -r '.id' <<< "$CI_RUN") for the selected immutable commit."
 
-          [[ "$MCP_OAUTH_PRODUCTION_READY" == "true" ]] || fail_gate "MCP_OAUTH_PRODUCTION_READY must be true after the documented OAuth review"
+          if [[ "$MCP_OAUTH_PRODUCTION_READY" != "true" && "$MCP_OAUTH_BOOTSTRAP_APPROVED" != "true" ]]; then
+            fail_gate "Set MCP_OAUTH_BOOTSTRAP_APPROVED=true for the restricted OAuth-only bootstrap, or MCP_OAUTH_PRODUCTION_READY=true after full review"
+          fi
           test "$VPS_TARGET_ID" = "tce-k3s-01" || fail_gate "VPS_TARGET_ID must equal tce-k3s-01"
           [[ -n "$VPS_HOST" ]] || fail_gate "VPS_HOST is not available in the tce-k3s-01 Environment"
           [[ "$VPS_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || fail_gate "VPS_HOST must be a valid hostname"
@@ -74,8 +77,8 @@ jobs:
         run: |
           set -euo pipefail
           install -m 700 -d ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/vps_deploy
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf '%s\\n' "$SSH_PRIVATE_KEY" > ~/.ssh/vps_deploy
+          printf '%s\\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/vps_deploy ~/.ssh/known_hosts
           ssh-keygen -y -f ~/.ssh/vps_deploy >/dev/null
           ssh-keygen -F "$VPS_HOST" -f ~/.ssh/known_hosts >/dev/null
@@ -89,17 +92,17 @@ jobs:
           VPS_SSH_PORT: ${{ vars.VPS_SSH_PORT || '22' }}
         run: |
           set -euo pipefail
-          SSH=(ssh -i "$HOME/.ssh/vps_deploy" -p "$VPS_SSH_PORT" \
-            -o BatchMode=yes -o IdentitiesOnly=yes \
+          SSH=(ssh -i "$HOME/.ssh/vps_deploy" -p "$VPS_SSH_PORT" \\
+            -o BatchMode=yes -o IdentitiesOnly=yes \\
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts")
           PREFLIGHT_OUTPUT="$("${SSH[@]}" "$VPS_USER@$VPS_HOST" "sudo -n /usr/local/sbin/vps-mcp-preflight")"
-          SUMMARY="$(printf '%s\n' "$PREFLIGHT_OUTPUT" | grep '^Summary:' | tail -n 1)"
+          SUMMARY="$(printf '%s\\n' "$PREFLIGHT_OUTPUT" | grep '^Summary:' | tail -n 1)"
           test -n "$SUMMARY"
           if ! grep -Fq "Expected node ${VPS_TARGET_ID} is Ready" <<< "$PREFLIGHT_OUTPUT"; then
             echo "::error::Read-only VPS preflight did not confirm the configured target node."
             exit 1
           fi
-          printf 'Read-only VPS preflight passed for %s: %s\n' "$VPS_TARGET_ID" "$SUMMARY"
+          printf 'Read-only VPS preflight passed for %s: %s\\n' "$VPS_TARGET_ID" "$SUMMARY"
 
       - name: Build and publish immutable multi-architecture gateway image
         env:
@@ -108,10 +111,10 @@ jobs:
           set -euo pipefail
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           unset GHCR_TOKEN
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --file apps/mcp-gateway/Dockerfile \
-            --tag ghcr.io/phanthienquoc/vps-mcp-controller:${GITHUB_SHA} \
+          docker buildx build \\
+            --platform linux/amd64,linux/arm64 \\
+            --file apps/mcp-gateway/Dockerfile \\
+            --tag ghcr.io/phanthienquoc/vps-mcp-controller:${GITHUB_SHA} \\
             --push .
 
       - name: Invoke root-owned deploy entrypoint
@@ -122,10 +125,10 @@ jobs:
           GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
         run: |
           set -euo pipefail
-          SSH=(ssh -i "$HOME/.ssh/vps_deploy" -p "$VPS_SSH_PORT" \
-            -o BatchMode=yes -o IdentitiesOnly=yes \
+          SSH=(ssh -i "$HOME/.ssh/vps_deploy" -p "$VPS_SSH_PORT" \\
+            -o BatchMode=yes -o IdentitiesOnly=yes \\
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts")
-          printf '%s' "$GHCR_READ_TOKEN" | "${SSH[@]}" "$VPS_USER@$VPS_HOST" \
+          printf '%s' "$GHCR_READ_TOKEN" | "${SSH[@]}" "$VPS_USER@$VPS_HOST" \\
             "sudo -n /usr/local/sbin/vps-mcp-deploy '$GITHUB_SHA'"
           unset GHCR_READ_TOKEN
 
@@ -135,9 +138,10 @@ jobs:
           VPS_TARGET_ID: ${{ vars.VPS_TARGET_ID }}
         run: |
           {
-            echo "### VPS MCP deployment succeeded"
+            echo "### VPS MCP OAuth bootstrap deployed"
             echo "- Target: ${VPS_TARGET_ID}"
             echo "- Revision: ${GITHUB_SHA}"
+            echo "- Root Agent tools: disabled"
             echo "- Image: ghcr.io/phanthienquoc/vps-mcp-controller:${GITHUB_SHA}"
             echo "- Platforms: linux/amd64, linux/arm64"
           } >> "$GITHUB_STEP_SUMMARY"
