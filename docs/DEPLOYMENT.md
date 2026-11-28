@@ -2,6 +2,22 @@
 
 Production-only. No Keycloak, no external identity provider and no static bearer-token mode.
 
+## Restricted OAuth bootstrap mode
+
+The first production rollout is intentionally OAuth-only:
+
+- HTTPS terminates at the existing Traefik ingress using the cert-manager Secret `mcp-mrcute-space-tls`.
+- The Gateway runs the self-hosted OAuth authorization server and protected MCP resource.
+- `MCP_ROOT_AGENT_ENABLED=false` is explicit in the Kubernetes Deployment. The MCP server registers no VPS administration tools in this mode.
+- The Gateway Pod does not mount `/run/vps-mcp` and has no access to the Root Agent Unix socket.
+- OAuth state remains on the `mcp-auth-data` PVC.
+
+To authorize this restricted first rollout, set the GitHub Environment variable `MCP_OAUTH_BOOTSTRAP_APPROVED=true`. Do not set `MCP_OAUTH_PRODUCTION_READY=true` merely to pass the bootstrap gate. The workflow still requires successful CI for the exact master SHA, strict SSH host verification and the read-only VPS preflight.
+
+After deployment, verify `/healthz`, OAuth metadata, login, DCR, Authorization Code + PKCE S256, token audience/scope, and the actual ChatGPT callback URI in the connector UI. Keep Root Agent tools disabled during all these tests.
+
+Enabling VPS tools is a separate change requiring independent security review, proxy-peer/rate-limit review, restore and signing-key rotation rehearsals, and successful live ChatGPT authorization. That later change must explicitly enable `MCP_ROOT_AGENT_ENABLED` and add the Root Agent socket mount back to the Pod in a reviewed release. Do not toggle the flag alone: without the socket mount, the Root Agent client cannot connect.
+
 ## Self-hosted OAuth 2.1
 
 The MCP Gateway hosts both the protected resource and a minimal authorization server at `https://mcp.mrcute.space`.
@@ -30,7 +46,7 @@ The app hashes the bootstrap password with scrypt and stores the account in SQLi
 
 ## Persistent data
 
-The deployment mounts a persistent volume claim `mcp-auth-data` at `/var/lib/vps-mcp-auth`. SQLite stores users, registered OAuth clients, sessions, authorization codes and refresh-token families. Do not run more than one gateway replica against this SQLite database. The deployment strategy is Recreate.
+The deployment mounts a persistent volume claim `mcp-auth-data` at `/var/lib/vps-mcp-auth`. SQLite stores users, registered OAuth clients, sessions, authorization codes and refresh-token families. Do not run more than one gateway replica against this SQLite database. The deployment strategy is Recreate. With local-path WaitForFirstConsumer storage, the PVC may remain Pending until the Gateway Pod is scheduled.
 
 ## Signing-key rotation procedure
 
@@ -76,55 +92,34 @@ kubectl cp "$NS/$POD:$BACKUP" "./mcp-auth-$STAMP.sqlite"
 sha256sum "./mcp-auth-$STAMP.sqlite"
 ```
 
-Encrypt the exported backup at rest, restrict access, store it outside the VPS/PVC, and retain its checksum and timestamp. Test restore periodically in an isolated namespace/PVC: stop the test Gateway, restore the snapshot as `auth.sqlite`, start the test Gateway with the matching Secret version, run `PRAGMA integrity_check`, and verify a test login plus existing client/session state. Never test restore against the production PVC. The backup command and integrity check are documented; a full restore rehearsal is still a production gate.
+Encrypt the exported backup at rest, restrict access, store it outside the VPS/PVC, and retain its checksum and timestamp. Test restore periodically in an isolated namespace/PVC: stop the test Gateway, restore the snapshot as `auth.sqlite`, start the test Gateway with the matching Secret version, run `PRAGMA integrity_check`, and verify a test login plus existing client/session state. Never test restore against the production PVC.
 
-## Important implementation limitations / security gates
+## Remaining security review
 
 - Login uses a single bootstrap administrator account. User creation, password reset/change UI, multi-user administration and MFA are not implemented.
-- Login attempts are throttled by IP/email in SQLite. Place the service behind the existing trusted HTTPS ingress and preserve a trustworthy client IP policy; do not blindly trust user-supplied forwarded headers.
-- DCR accepts HTTPS redirect URIs only and stores exact URI matches. The ChatGPT callback-ID-specific URI is supported when supplied by the connector management UI; the exact concrete URI is preserved through DCR, consent redirect and token exchange. Do not guess or hardcode a callback ID. The actual ChatGPT integration must still be verified against the URI shown by the connector UI.
-- CIMD and `private_key_jwt` are not advertised or supported; the authorization server advertises DCR and public-client `none`.
-- Access JWTs last five minutes. Revoking refresh tokens does not immediately invalidate already-issued access tokens; they expire within five minutes.
-- Refresh tokens rotate on every use; reuse of a consumed token revokes its family.
+- Login attempts are throttled by direct peer IP/email. Keep proxy trust disabled until the ingress proxy boundary and trusted address ranges are verified.
+- The exact ChatGPT callback-ID-specific redirect URI must be taken from the connector management UI and tested; never guess or hardcode it.
+- CIMD and `private_key_jwt` are not advertised or supported.
+- Access JWTs last five minutes; refresh-token rotation and replay-family revocation are implemented.
 - Signing private key and bootstrap password are runtime secrets only; never put them in Git, ConfigMaps, command history or chat.
-
-## Before deployment
-
-The merged `master` revision has passed Node 26 CI (shell validation, typecheck, build and test suite). Production still requires an OAuth protocol/security review and an end-to-end ChatGPT MCP authorization test. Confirm persistent volume availability and provision the Kubernetes Secret out of band. Do not install the Root Agent or deploy until separately authorized.
+- Root Agent tools remain disabled in bootstrap mode and must not be enabled until independent review and the documented operational rehearsals pass.
 
 ## Approved deployment workflow gates
 
-The only approved production path is the manual `.github/workflows/deploy-vps.yml` workflow on `master`, using the GitHub Environment `tce-k3s-01`. The workflow validates the immutable `GITHUB_SHA` before publishing and rechecks the read-only VPS preflight before any image build/publish step.
+The manual `.github/workflows/deploy-vps.yml` workflow on `master` uses the GitHub Environment `tce-k3s-01`.
 
-Required Environment variables (values are configured in GitHub, never committed):
-- `MCP_OAUTH_PRODUCTION_READY=true`: set only after the OAuth protocol/security review and ChatGPT MCP authorization end-to-end test pass.
-- `VPS_TARGET_ID=tce-k3s-01`: fixed target identifier; any other value is rejected.
-- `VPS_HOST`: the SSH host covered by the pinned known-hosts entry.
-- `VPS_USER`: an existing non-root SSH deploy user.
-- `VPS_SSH_PORT=22`: other ports are rejected.
+Required Environment variables:
+- `MCP_OAUTH_BOOTSTRAP_APPROVED=true` authorizes only the restricted OAuth bootstrap. Root Agent tools remain disabled and the socket is not mounted.
+- `MCP_OAUTH_PRODUCTION_READY=true` is reserved for a later fully reviewed production release; do not set it for the bootstrap.
+- `VPS_TARGET_ID=tce-k3s-01`, `VPS_HOST`, `VPS_USER` (non-root), and `VPS_SSH_PORT=22`.
 
-Required Environment secrets:
-- `VPS_SSH_PRIVATE_KEY`
-- `VPS_KNOWN_HOSTS`
-- `GHCR_READ_TOKEN` with read-only package access.
-
-Before any SSH connection or image publication, the workflow requires a completed successful `CI` push run for the exact selected `GITHUB_SHA` on `master`; it does not accept a green run from another commit or branch. The workflow uses the narrowly scoped Actions read permission for that check. It also requires `VPS_TARGET_ID=tce-k3s-01`, SSH port 22, a non-root deploy account, and a pinned `known_hosts` entry with `StrictHostKeyChecking=yes`. The read-only `sudo -n /usr/local/sbin/vps-mcp-preflight` must explicitly confirm that the configured Kubernetes target node is Ready before image publication. The workflow logs only the preflight summary, not host inventory. The root-owned entrypoint then independently verifies that the requested SHA is reachable from `origin/master` and applies only manifests archived from that trusted checkout. The Gateway is pinned to `tce-k3s-01` because the Root Agent socket is a hostPath.
-
-Install the Root Agent and the root-owned deploy/preflight wrappers only through their reviewed installers and only after the user-run preflight has been inspected. Do not use ad-hoc SSH shell commands or direct `kubectl apply` for production deployment.
+Required Environment secrets: `VPS_SSH_PRIVATE_KEY`, `VPS_KNOWN_HOSTS`, and read-only `GHCR_READ_TOKEN`. The workflow requires successful CI for the exact immutable master SHA, SSH with `-o StrictHostKeyChecking=yes` and the pinned `VPS_KNOWN_HOSTS` file, plus a read-only VPS preflight before image publication. The root-owned entrypoint independently verifies the requested SHA is reachable from `origin/master` and applies manifests archived from that trusted checkout.
 
 ## Host bootstrap sequence
 
-The first read-only preflight may report that the Root Agent, socket group, OAuth Secret or root-owned wrappers are not installed yet. Treat those as blockers; do not bypass them. After the output has been reviewed and the user explicitly authorizes host setup, the reviewed installers are:
+The first read-only preflight may report missing Root Agent, socket group, OAuth Secret or root-owned wrappers. Treat these as blockers; do not bypass them. After the output has been reviewed and host setup explicitly authorized, use only the reviewed installers:
 
 - `sudo bash /opt/vps-mcp-controller/scripts/install-root-agent.sh`
 - `sudo bash /opt/vps-mcp-controller/scripts/install-deploy-entrypoint.sh <existing-non-root-ssh-user>`
 
-The second installer creates root-owned `vps-mcp-deploy` and `vps-mcp-preflight` wrappers plus a command-scoped sudoers rule. Re-run it after changing either trusted script. These commands change the host and must not be run as part of the read-only preflight.
-
-## Existing VPS preflight
-
-```bash
-sudo bash /opt/vps-mcp-controller/scripts/preflight-vps.sh
-```
-
-This command is read-only. No production workload changes are authorized by merging this PR.
+Re-run the read-only preflight after installation. The bootstrap Gateway does not mount the Root Agent socket, but the approved deployment entrypoint still validates the host's deployment trust boundary.

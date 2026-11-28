@@ -39,8 +39,8 @@ spec:
               value: "3000"
             - name: MCP_ALLOWED_HOST
               value: mcp.mrcute.space
-            - name: ROOT_AGENT_SOCKET
-              value: /run/vps-mcp/root-agent.sock
+            - name: MCP_ROOT_AGENT_ENABLED
+              value: "false"
             - name: MCP_AUTH_DB_PATH
               value: /var/lib/vps-mcp-auth/auth.sqlite
             - name: MCP_OAUTH_ISSUER
@@ -98,18 +98,11 @@ spec:
             capabilities:
               drop: ["ALL"]
           volumeMounts:
-            - name: root-agent-socket
-              mountPath: /run/vps-mcp
-              readOnly: true
             - name: tmp
               mountPath: /tmp
             - name: mcp-auth-data
               mountPath: /var/lib/vps-mcp-auth
       volumes:
-        - name: root-agent-socket
-          hostPath:
-            path: /run/vps-mcp
-            type: Directory
         - name: tmp
           emptyDir:
             sizeLimit: 32Mi
